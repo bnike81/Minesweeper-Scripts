@@ -1,0 +1,17 @@
+fileFormatVersion: 2
+guid: aea38693257d9df40b42a0ea83c92f66
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - _shepherdPrefab: {fileID: 4893372343477818078, guid: 839a991cd3539ff42bb808c20d43533a, type: 3}
+  - _sheepPrefab: {fileID: 8977071686463974916, guid: 77d8512fb4a929e4cb48debc6bdf9d8a, type: 3}
+  - _cabinPrefab: {fileID: 898934921929057125, guid: 60dbc62ab07e8894f9de15888ea0e20f, type: 3}
+  - _barrelPrefab: {fileID: 7102097286321514578, guid: fb1f9562394f7024286920bbee855db1, type: 3}
+  - _haySmallPrefab: {fileID: 7308432775853259012, guid: 8a04d2468034b104dbe0f445615e8876, type: 3}
+  - _hayBigPrefab: {fileID: 8174486200942549996, guid: 70bc28200bf47c942b18ea624e8ece28, type: 3}
+  executionOrder: -20
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
