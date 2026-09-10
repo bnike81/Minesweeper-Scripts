@@ -1,0 +1,41 @@
+fileFormatVersion: 2
+guid: 7f60dd5ec16ec3f4ebf3a25616c02bb4
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - _bgRenderer: {instanceID: 0}
+  - _treeLayerRenderer: {instanceID: 0}
+  - _iconRenderer: {instanceID: 0}
+  - _numberRenderer: {instanceID: 0}
+  - _groundRevealedSprite: {instanceID: 0}
+  - _hiddenGroundSprite: {instanceID: 0}
+  - _flagSprite: {instanceID: 0}
+  - _treeTrunkSprite: {instanceID: 0}
+  - _treeCanopySprite: {instanceID: 0}
+  - _treeCimeSprite: {instanceID: 0}
+  - _treeBuissonSprite: {instanceID: 0}
+  - _number1Sprite: {instanceID: 0}
+  - _number2Sprite: {instanceID: 0}
+  - _number3Sprite: {instanceID: 0}
+  - _number4Sprite: {instanceID: 0}
+  - _number5Sprite: {instanceID: 0}
+  - _number6Sprite: {instanceID: 0}
+  - _number7Sprite: {instanceID: 0}
+  - _number8Sprite: {instanceID: 0}
+  - _wolfSprite: {instanceID: 0}
+  - _bearSprite: {instanceID: 0}
+  - _mercenarySprite: {instanceID: 0}
+  - _banditSprite: {instanceID: 0}
+  - _bossSprite: {instanceID: 0}
+  - _campfireSprite: {instanceID: 0}
+  - _flowerSprite: {instanceID: 0}
+  - _chestSprite: {instanceID: 0}
+  - _fountainSprite: {instanceID: 0}
+  - _scrollSprite: {instanceID: 0}
+  - _trapSprite: {instanceID: 0}
+  executionOrder: 100
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

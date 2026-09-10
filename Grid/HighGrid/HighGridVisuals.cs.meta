@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: 512cd3503605d9646a6711da0da82f7e
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - _treeTrunkSprite: {instanceID: 0}
+  - _treeCanopySprite: {instanceID: 0}
+  - _treeCimeSprite: {instanceID: 0}
+  - _groundSprite: {instanceID: 0}
+  - _treeBuissonSprite: {instanceID: 0}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
