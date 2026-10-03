@@ -24,6 +24,7 @@ public class MerchantSpawner : MonoBehaviour
     [SerializeField, Range(1, 5)] private int _edgeMargin = 3;
     [Tooltip("Cases de marge depuis la frontiere niveau 2/3")]
     [SerializeField, Range(2, 10)] private int _borderRange = 8;
+    
 
     [Header("=== Probabilites de Zone ===")]
     [Tooltip("Chance que le marchand soit dans un coin de la zone")]
