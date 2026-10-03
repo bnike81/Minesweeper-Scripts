@@ -41,6 +41,16 @@ public class MainGrid : MonoBehaviour
         if (x < 0 || y < 0 || x >= gm.Width || y >= gm.Height) return null;
         return _cellViews[x, y];
     }
+    public void SetCellView(int x, int y, ICellView view)
+    {
+        if (_cellViews == null) return;
+        if (x < 0 || y < 0 || x >= _cellViews.GetLength(0) || y >= _cellViews.GetLength(1)) return;
+        _cellViews[x, y] = view;
+    }
+    public void RefreshTreeColumnPublic(int x)
+    {
+        RefreshTreeColumn(x);
+    }
 
     // ── Queue de spawn ────────────────────────────────────────────────────────
 
@@ -259,6 +269,90 @@ public class MainGrid : MonoBehaviour
         _dirtyTreeColumns.Add(x);
     }
 
+    /// <summary>
+    /// Re-spawne les cell views dont le biome a changé (Forest → Beach).
+    /// Appelé par BeachGenerator après avoir peint BiomeType.Beach.
+    /// Détruit l'ancien view et crée un nouveau avec le bon prefab biome.
+    /// </summary>
+    public void RespawnCells(List<Vector2Int> positions)
+    {
+        var gm = GridManager.Instance;
+        if (gm == null || _cellViews == null) return;
+
+        var biomeDb = _biomeDatabase ?? gm.BiomeDatabaseAsset;
+        var basePrefab = _cellPrefab ?? gm.CellPrefab;
+        float cellStep = gm.CellStep;
+        int stepPixels = Mathf.RoundToInt(cellStep * 16f);
+
+        int respawned = 0;
+
+        foreach (var pos in positions)
+        {
+            int x = pos.x, y = pos.y;
+            if (x < 0 || x >= gm.Width || y < 0 || y >= gm.Height) continue;
+            if (y >= _cellViews.GetLength(1)) continue;
+
+            var cell = gm.Grid[x, y];
+            if (cell == null) continue;
+
+            // Détruire l'ancien cell view
+            var oldView = _cellViews[x, y];
+            if (oldView != null)
+            {
+                var oldMB = oldView as MonoBehaviour;
+                if (oldMB != null)
+                {
+                    CellViewCuller.Instance?.UnregisterCell(x, y);
+                    Destroy(oldMB.gameObject);
+                }
+                _cellViews[x, y] = null;
+            }
+
+            // Créer le nouveau avec le bon prefab biome
+            var prefab = biomeDb != null
+                ? biomeDb.GetCellPrefab(cell.Biome) ?? basePrefab
+                : basePrefab;
+
+            float wx = (x * stepPixels) / 16f;
+            float wy = (y * stepPixels) / 16f;
+
+            var go = Instantiate(prefab, new Vector3(wx, wy, 0f), Quaternion.identity, transform);
+
+            var baseView = go.GetComponent<CellViewBase>();
+            if (baseView != null)
+            {
+                baseView.Initialize(cell);
+                _cellViews[x, y] = baseView;
+            }
+            else
+            {
+                var view = go.GetComponent<CellView>();
+                if (view != null)
+                {
+                    view.Initialize(cell);
+                    _cellViews[x, y] = view;
+                }
+            }
+
+            var sr = go.GetComponent<SpriteRenderer>();
+            if (sr != null)
+            {
+                CellViewCuller.Instance?.RegisterCell(x, y, sr);
+                SpriteBatchingSetup.Instance?.ApplySharedMaterial(sr);
+            }
+
+            respawned++;
+        }
+
+        // Rafraîchir les tree columns affectées
+        var dirtyColumns = new HashSet<int>();
+        foreach (var pos in positions)
+            dirtyColumns.Add(pos.x);
+        foreach (int x in dirtyColumns)
+            RefreshTreeColumn(x);
+
+        Debug.Log($"[MainGrid] {respawned} cells re-spawnées (biome changé)");
+    }
     private void RefreshCellAndNeighbours(int cx, int cy)
     {
         var gm = GridManager.Instance;
@@ -286,13 +380,21 @@ public class MainGrid : MonoBehaviour
 
         for (int y = 0; y < gm.Height; y++)
         {
+            if (y >= _cellViews.GetLength(1)) break;
+
             var cell = gm.Grid[x, y];
             var view = _cellViews[x, y];
             if (view == null || cell == null) continue;
-            if (cell.IsRevealed || cell.Biome != BiomeType.Forest) continue;
+            if (cell.IsRevealed) continue;
 
+            // Seuls Forest et Beach ont des arbres/palmiers
+            bool isForest = (cell.Biome == BiomeType.Forest);
+            bool isBeach = (cell.Biome == BiomeType.Beach);
+            if (!isForest && !isBeach) continue;
+
+            // Calculer le layer selon les voisins révélés
             bool belowRevealed = (y == 0) || gm.Grid[x, y - 1].IsRevealed;
-            bool aboveRevealed = (y == gm.Height - 1) || gm.Grid[x, y + 1].IsRevealed;
+            bool aboveRevealed = (y >= gm.Height - 1) || gm.Grid[x, y + 1].IsRevealed;
 
             ForestCellView.TreeLayerType type;
             if (belowRevealed && aboveRevealed) type = ForestCellView.TreeLayerType.Buisson;
@@ -300,7 +402,59 @@ public class MainGrid : MonoBehaviour
             else if (aboveRevealed) type = ForestCellView.TreeLayerType.Cime;
             else type = ForestCellView.TreeLayerType.Canopy;
 
-            (view as ForestCellView)?.SetTreeLayer(type);
+            // Appliquer au bon biome
+            if (isForest)
+            {
+                var fv = view as ForestCellView;
+                if (fv != null)
+                {
+                    fv.SetTreeLayer(type);
+
+                    // Transition canopée vers plage
+                    if (type == ForestCellView.TreeLayerType.Canopy)
+                    {
+                        bool palmAbove = (y + 1 < gm.Height
+                            && !gm.Grid[x, y + 1].IsRevealed
+                            && gm.Grid[x, y + 1].Biome == BiomeType.Beach);
+                        bool palmBelow = (y - 1 >= 0
+                            && !gm.Grid[x, y - 1].IsRevealed
+                            && gm.Grid[x, y - 1].Biome == BiomeType.Beach);
+
+                        if (palmAbove)
+                            fv.SetCanopyTransition(true, isAbove: true);
+                        else if (palmBelow)
+                            fv.SetCanopyTransition(true, isAbove: false);
+                        else
+                            fv.SetCanopyTransition(false, false);
+                    }
+                }
+            }
+            else // Beach
+            {
+                var bv = view as BeachCellView;
+                if (bv != null)
+                {
+                    bv.SetTreeLayer(type);
+
+                    // Transition canopée vers forêt
+                    if (type == ForestCellView.TreeLayerType.Canopy)
+                    {
+                        bool treeAbove = (y + 1 < gm.Height
+                            && !gm.Grid[x, y + 1].IsRevealed
+                            && gm.Grid[x, y + 1].Biome == BiomeType.Forest);
+                        bool treeBelow = (y - 1 >= 0
+                            && !gm.Grid[x, y - 1].IsRevealed
+                            && gm.Grid[x, y - 1].Biome == BiomeType.Forest);
+
+                        if (treeAbove)
+                            bv.SetCanopyTransition(true, isAbove: true);
+                        else if (treeBelow)
+                            bv.SetCanopyTransition(true, isAbove: false);
+                        else
+                            bv.SetCanopyTransition(false, false);
+                    }
+                }
+            }
         }
     }
 

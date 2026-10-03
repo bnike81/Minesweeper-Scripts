@@ -164,10 +164,18 @@ public class EnemyInstance : MonoBehaviour,
         var hero = HeroController.Instance;
         if (hero != null)
         {
-            float cs = GridManager.Instance?.CellStep ?? 1.05f;
-            int hx = Mathf.RoundToInt(hero.transform.position.x / cs);
-            int hy = Mathf.RoundToInt(hero.transform.position.y / cs);
-            int dist = Mathf.Max(Mathf.Abs(hx - _gridX), Mathf.Abs(hy - _gridY));
+            var grid = ActiveGrid.Current;
+            Vector2Int heroGrid;
+            if (grid != null)
+                heroGrid = grid.WorldToGrid(hero.transform.position);
+            else
+            {
+                float cs = GridManager.Instance?.CellStep ?? 1.05f;
+                heroGrid = new Vector2Int(
+                    Mathf.RoundToInt(hero.transform.position.x / cs),
+                    Mathf.RoundToInt(hero.transform.position.y / cs));
+            }
+            int dist = Mathf.Max(Mathf.Abs(heroGrid.x - _gridX), Mathf.Abs(heroGrid.y - _gridY));
             if (dist > 1)
             {
                 if (heroState != null) heroState.IsUILocked = false;

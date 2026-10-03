@@ -9,6 +9,12 @@ using UnityEngine.EventSystems;
 ///
 /// Crée dynamiquement les SpriteRenderers enfants nécessaires
 /// (pas besoin de prefab — tout est configuré par code).
+///
+/// PORTAILS (nouvelle logique) :
+///   Les cases portail sont des MURS qui portent le sprite bordBasCave.
+///   _isEntryPortal et _isExitPortal sont détectés via CaveAutoTiler,
+///   qui est la source de vérité unique pour ces positions.
+///   Plus de référence à UndergroundGrid.IsExitPortal().
 /// </summary>
 public class UndergroundCellView : MonoBehaviour, IPointerClickHandler
 {
@@ -21,16 +27,18 @@ public class UndergroundCellView : MonoBehaviour, IPointerClickHandler
     private Cell _cell;
     private CaveSpriteSet _spriteSet;
     private CaveLayout _layout;
+
+    /// <summary>Y grille de cette cell view — utilisé par CaveManager pour isoler les caves.</summary>
+    public int GetCellY() => _cell?.Y ?? -1;
     private Sprite _autoTiledSprite;
     private Sprite _hiddenSprite;
     private bool _isFloor;
     private bool _isWallContour;
-    private bool _isExitPortal;
+    private bool _isEntryPortal;   // case mur portail entrée (y=0)
+    private bool _isExitPortal;    // case mur portail sortie (y=H-1)
     private bool _initialized;
     private EnemyInstance _enemyInstance;
-    private bool _enemySpawned; // true = ennemi déjà créé, ne PAS respawn
-
-    // Sprites nombres viennent de CaveSpriteSet (assignés dans Inspector)
+    private bool _enemySpawned;    // true = ennemi déjà créé, ne PAS respawn
 
     // =========================================================================
     // INITIALISATION
@@ -42,22 +50,25 @@ public class UndergroundCellView : MonoBehaviour, IPointerClickHandler
         _layout = layout;
         _spriteSet = spriteSet;
 
-        // Créer les renderers enfants
         SetupRenderers();
 
         _isFloor = layout.IsFloor(cell.X, cell.Y);
         _isWallContour = CaveAutoTiler.IsWallContour(layout, cell.X, cell.Y);
         _autoTiledSprite = CaveAutoTiler.GetSprite(layout, cell.X, cell.Y, spriteSet);
-        _hiddenSprite = spriteSet?.hiddenRock;
+        // Garantir un sprite fallback pour les murs de contour — évite les cases vides
+        if (_autoTiledSprite == null && (_isWallContour || _isEntryPortal || _isExitPortal))
+            _autoTiledSprite = spriteSet?.wallFull;
+        _hiddenSprite = spriteSet?.hiddenRock ?? spriteSet?.wallFull;
 
-        var ug = UndergroundGrid.Instance;
-        _isExitPortal = ug != null && ug.IsExitPortal(cell.X, cell.Y);
+        // ── Détection portails via CaveAutoTiler (source unique de vérité) ────
+        _isEntryPortal = CaveAutoTiler.IsEntryPortal(layout, cell.X, cell.Y);
+        _isExitPortal = CaveAutoTiler.IsExitPortal(layout, cell.X, cell.Y);
 
-        // Murs → toujours révélés
-        if (_isWallContour || !_isFloor)
+        // Murs de contour + portails → toujours révélés (toujours visibles)
+        // Les roches profondes (!_isWallContour && !_isFloor) ne sont pas révélées
+        // — elles n'ont pas de cell view (SpawnViews les filtre) et sont couvertes par le fog
+        if (_isWallContour || _isEntryPortal || _isExitPortal)
             cell.ForceReveal();
-
-
 
         ApplySprite();
         _initialized = true;
@@ -91,8 +102,6 @@ public class UndergroundCellView : MonoBehaviour, IPointerClickHandler
         _iconRenderer.enabled = false;
     }
 
-
-
     // =========================================================================
     // AFFICHAGE
     // =========================================================================
@@ -112,7 +121,8 @@ public class UndergroundCellView : MonoBehaviour, IPointerClickHandler
 
     private void ShowHidden()
     {
-        if (_isWallContour)
+        _bgRenderer.enabled = true;
+        if (_isWallContour || _isEntryPortal || _isExitPortal)
             _bgRenderer.sprite = _autoTiledSprite ?? _hiddenSprite;
         else
             _bgRenderer.sprite = _hiddenSprite;
@@ -120,13 +130,14 @@ public class UndergroundCellView : MonoBehaviour, IPointerClickHandler
 
     private void ShowRevealed()
     {
-        if (!_isFloor)
+        _bgRenderer.enabled = true;
+        if (!_isFloor || _isEntryPortal || _isExitPortal)
         {
             _bgRenderer.sprite = _autoTiledSprite ?? _spriteSet?.wallFull ?? _hiddenSprite;
             return;
         }
 
-        // Sol révélé — fond
+        // Sol révélé — fond procédural
         Sprite ground = null;
         var gvs = GroundVariantSystem.Instance;
         if (gvs != null && _layout != null)
@@ -144,17 +155,14 @@ public class UndergroundCellView : MonoBehaviour, IPointerClickHandler
         }
         else if (_cell.Content == CellContent.Empty && _enemyInstance != null)
         {
-            // Ennemi battu → ne pas respawn, nettoyer la référence
-            _enemyInstance = null;
+            _enemyInstance = null; // ennemi battu — ne pas respawn
         }
 
         if (_cell.AdjacentDangerCount > 0 && !isEnemy && !isBoss)
-        {
             ShowNumber(_cell.AdjacentDangerCount);
-        }
     }
 
-    // ── Nombres ──────────────────────────────────────────────────────────────
+    // ── Nombres ───────────────────────────────────────────────────────────────
 
     private void ShowNumber(int count)
     {
@@ -167,10 +175,6 @@ public class UndergroundCellView : MonoBehaviour, IPointerClickHandler
             _numberRenderer.sprite = numSprite;
             _numberRenderer.enabled = true;
         }
-        else
-        {
-            HideNumber();
-        }
     }
 
     private void HideNumber()
@@ -178,70 +182,42 @@ public class UndergroundCellView : MonoBehaviour, IPointerClickHandler
         if (_numberRenderer != null) _numberRenderer.enabled = false;
     }
 
-    // ── Icônes ───────────────────────────────────────────────────────────────
-
-    private void ShowIcon(Sprite sprite)
-    {
-        if (_iconRenderer == null) return;
-        _iconRenderer.sprite = sprite;
-        _iconRenderer.enabled = sprite != null;
-    }
-
     private void HideIcon()
     {
         if (_iconRenderer != null) _iconRenderer.enabled = false;
     }
 
-    // ── Ennemis ──────────────────────────────────────────────────────────────
+    // ── Spawn ennemi ──────────────────────────────────────────────────────────
 
     private void SpawnEnemyInstance(CellContent enemyType)
     {
-        // Vérifier si l'ennemi existe déjà (Unity: objet détruit == null mais pas toujours)
-        if (_enemyInstance != null && _enemyInstance.gameObject != null) return;
-        _enemyInstance = null; // reset si détruit
-
         var db = EnemyDatabase.Instance;
         var data = db?.Get(enemyType);
+        if (data?.prefab == null) return;
 
-        // Sauvegarder le sprite du prefab AVANT Instantiate
-        Sprite prefabSprite = null;
-        if (data?.prefab != null)
+        var ug = UndergroundGrid.Instance;
+        if (ug == null) return;
+
+        Vector3 worldPos = ug.GridToWorld(_cell.X, _cell.Y);
+        var go = Object.Instantiate(data.prefab, worldPos, Quaternion.identity);
+
+        // Parent dans CaveSpawner.EnemiesContainer si disponible
+        var cm = CaveManager.Instance;
+        if (cm != null)
         {
-            var prefabSR = data.prefab.GetComponent<SpriteRenderer>();
-            if (prefabSR != null) prefabSprite = prefabSR.sprite;
+            var spawner = cm.GetSpawner(cm.ActiveCaveIndex);
+            if (spawner != null)
+            {
+                spawner.EnsureContainers();
+                go.transform.SetParent(spawner.EnemiesContainer);
+            }
         }
 
-        // Créer l'instance
-        GameObject go;
-        if (data != null && data.prefab != null)
-        {
-            go = Instantiate(data.prefab, null);
-        }
-        else
-        {
-            // Fallback : pas de prefab trouvé dans EnemyDatabase
-            go = new GameObject($"E_{enemyType}");
-            var fallbackSR = go.AddComponent<SpriteRenderer>();
-            fallbackSR.sortingLayerName = "CellContent";
-            fallbackSR.sortingOrder = 5;
-            go.AddComponent<BoxCollider2D>().size = Vector2.one * 0.8f;
-            Debug.LogWarning($"[UCV] ⚠️ Prefab introuvable pour {enemyType} dans EnemyDatabase !");
-        }
+        Sprite prefabSprite = data.prefab.GetComponent<SpriteRenderer>()?.sprite;
 
-        // Position sur la case
-        go.transform.position = transform.position + new Vector3(0f, 0f, -0.15f);
-
-        // Stopper toutes les coroutines AVANT Initialize
-        // (empêche FallbackAttackDelay de lancer une attaque immédiate)
-        go.GetComponent<MonoBehaviour>()?.StopAllCoroutines();
-
-        // Initialiser l'EnemyInstance
-        _enemyInstance = go.GetComponent<EnemyInstance>();
-        if (_enemyInstance == null) _enemyInstance = go.AddComponent<EnemyInstance>();
-        _enemyInstance.Initialize(enemyType, _cell.X, _cell.Y);
-
-        // APRÈS Initialize : stopper l'attaque auto + forcer le sprite
-        _enemyInstance.StopAllCoroutines();
+        var enemy = go.GetComponent<EnemyInstance>();
+        if (enemy != null)
+            enemy.Initialize(enemyType, _cell.X, _cell.Y);
 
         var sr = go.GetComponent<SpriteRenderer>()
               ?? go.GetComponentInChildren<SpriteRenderer>();
@@ -250,17 +226,14 @@ public class UndergroundCellView : MonoBehaviour, IPointerClickHandler
             sr.sortingLayerName = "CellContent";
             sr.sortingOrder = 5;
             sr.enabled = true;
-            // Forcer le sprite depuis le prefab (Initialize peut le perdre)
-            if (prefabSprite != null)
-                sr.sprite = prefabSprite;
+            if (prefabSprite != null) sr.sprite = prefabSprite;
         }
 
-        _enemySpawned = true; // empêche le respawn dans les prochains RefreshAllViews
+        _enemySpawned = true;
 
         string spName = (sr != null && sr.sprite != null) ? sr.sprite.name : "NULL";
-        string dbInfo = data != null ? $"prefab={data.prefab?.name ?? "null"}" : "DB_MANQUANT";
         Debug.Log($"[UCV] Ennemi spawné : {enemyType} ({_cell.X},{_cell.Y}) " +
-                  $"sprite={spName} {dbInfo} prefabSprite={(prefabSprite?.name ?? "null")}");
+                  $"cave={cm?.ActiveCaveIndex ?? -1}");
     }
 
     // =========================================================================
@@ -271,47 +244,89 @@ public class UndergroundCellView : MonoBehaviour, IPointerClickHandler
     {
         if (_cell == null || !_initialized) return;
         if (eventData.button != PointerEventData.InputButton.Left) return;
-        if (!_isFloor || _isWallContour) return;
 
-        // Portail sortie
-        if (_isExitPortal)
+        // ── Portail (entrée OU sortie) → sortir de la grotte ───────────────
+        // Les deux portails sont bidirectionnels — on peut sortir par les deux.
+        // CaveManager.ExitCave détermine quel portail surface correspond.
+        if (_isExitPortal || _isEntryPortal)
         {
             CaveManager.Instance?.ExitCave(_cell.X, _cell.Y);
             return;
         }
 
+        // ── Murs → non cliquables ─────────────────────────────────────────────
+        if (!_isFloor || _isWallContour) return;
+
         var ug = UndergroundGrid.Instance;
         if (ug == null) return;
 
-        // Premier clic → placer les dangers
-        if (!ug.DangersPlaced)
+        var hero = HeroController.Instance;
+        if (hero == null) return;
+
+        // ── Safe first click → placer les dangers DANS LA CAVE ACTIVE ────────
+        var cm = CaveManager.Instance;
+        int ci = cm != null ? cm.ActiveCaveIndex : 0;
+
+        if (!ug.DangersPlacedForCave(ci))
         {
-            var caveGen = FindObjectOfType<CaveGenerator>(true);
-            ug.PlaceDangers(_cell.X, _cell.Y, caveGen?._config);
+            var spawner = cm?.GetSpawner(ci);
+            var config = spawner?.Config;
+            if (config == null)
+            {
+                var caveGen = FindObjectOfType<CaveGenerator>(true);
+                config = caveGen?._config;
+            }
+            if (config != null)
+            {
+                var (minY, maxY) = cm != null ? cm.GetCaveYRange(ci) : (0, -1);
+                Debug.Log($"[UCV] PlaceDangers cave={ci} Y=[{minY},{maxY}] " +
+                          $"config={config.name} ratio={config.dangerRatio}");
+                ug.PlaceDangers(_cell.X, _cell.Y, config, minY, maxY);
+                ug.MarkDangersPlaced(ci);
+            }
+            else
+            {
+                Debug.LogWarning($"[UCV] ❌ Pas de CaveConfig pour cave={ci} !");
+            }
         }
 
-        // Case déjà révélée avec ennemi → le héros doit s'approcher et attaquer
-        // (géré par HeroController.PathfindAndMove → combat)
-        // Ne pas re-traiter ici, laisser le système de mouvement gérer
-        if (_cell.IsRevealed && _cell.IsEnemy && _enemyInstance != null)
-            return; // HeroController gère l'approche + combat
+        var target = new Vector2Int(_cell.X, _cell.Y);
 
-        // Révéler la case
-        ug.RevealCell(_cell.X, _cell.Y);
+        // ── Combat en cours → fuir d'abord, puis bouger ───────────────────────
+        var combat = HeroCombat.Instance;
+        if (combat != null && combat.IsInCombat)
+        {
+            combat.RequestFlee(() =>
+            {
+                if (!_cell.IsRevealed)
+                    hero.ApproachAndRevealOnGrid(target, ug);
+                else
+                    hero.MoveOnGrid(target, ug);
+            });
+            return;
+        }
 
-        // Rafraîchir les vues pour montrer les nombres et ennemis révélés
-        RefreshAllViews();
+        // ── Case non révélée → s'approcher et révéler ─────────────────────────
+        if (!_cell.IsRevealed)
+        {
+            hero.ApproachAndRevealOnGrid(target, ug);
+            return;
+        }
 
-        // Si on vient de révéler un ennemi → le combat est géré par HeroCombat
-        // Ne pas re-traiter
+        // ── Case révélée (vide ou ennemi) → se déplacer ───────────────────────
+        // IsBlocked bloque les ennemis révélés → PathfindAndMove s'arrête adjacent
+        // → EnemyInstance.TriggerCombat se déclenche à l'arrivée
+        hero.MoveOnGrid(target, ug);
     }
 
-    /// <summary>Force le sprite après 1 frame (après Awake/Start de EnemyAnimator).</summary>
+    // ── Force sprite après 1 frame (après Awake/Start de EnemyAnimator) ──────
+
     private System.Collections.IEnumerator ForceSpriteLate(GameObject go, Sprite sprite)
     {
-        yield return null; // attendre 1 frame
+        yield return null;
         if (go == null) yield break;
-        var sr = go.GetComponent<SpriteRenderer>() ?? go.GetComponentInChildren<SpriteRenderer>();
+        var sr = go.GetComponent<SpriteRenderer>()
+              ?? go.GetComponentInChildren<SpriteRenderer>();
         if (sr != null && sprite != null)
         {
             sr.sprite = sprite;
@@ -327,20 +342,44 @@ public class UndergroundCellView : MonoBehaviour, IPointerClickHandler
     {
         if (_isExitPortal && CaveManager.Instance?.IsInCave == true)
             TooltipUI.Show("Sortir de la grotte");
+        else if (_isEntryPortal)
+            TooltipUI.Show("Entrer dans la grotte");
     }
 
     private void OnMouseExit()
     {
-        if (_isExitPortal) TooltipUI.Hide();
+        if (_isExitPortal || _isEntryPortal) TooltipUI.Hide();
     }
 
     // =========================================================================
     // REFRESH GLOBAL
     // =========================================================================
 
+    public void Refresh()
+    {
+        if (!_initialized || _layout == null || _spriteSet == null) return;
+        _isFloor = _layout.IsFloor(_cell.X, _cell.Y);
+        _isWallContour = CaveAutoTiler.IsWallContour(_layout, _cell.X, _cell.Y);
+        _autoTiledSprite = CaveAutoTiler.GetSprite(_layout, _cell.X, _cell.Y, _spriteSet);
+        if (_autoTiledSprite == null && (_isWallContour || _isEntryPortal || _isExitPortal))
+            _autoTiledSprite = _spriteSet?.wallFull;
+        ApplySprite();
+    }
+
+    /// <summary>
+    /// Rafraîchit uniquement les cases sol — chiffres et contenu.
+    /// Ne recalcule PAS les bitmasks des murs.
+    /// Utilisé après révélation et mort d'ennemi.
+    /// </summary>
+    public static void RefreshFloorNumbers()
+    {
+        foreach (var view in FindObjectsOfType<UndergroundCellView>())
+            if (view._isFloor) view.ApplySprite();
+    }
+
     public static void RefreshAllViews()
     {
         foreach (var view in FindObjectsOfType<UndergroundCellView>())
-            view.ApplySprite();
+            view.Refresh();
     }
 }

@@ -395,10 +395,19 @@ public class GridManager : MonoBehaviour, IGridContext
         var availableCells = GetAvailableCells(excluded);
         Shuffle(availableCells);
 
-        // Utiliser EnemySpawnTable si disponible
+        // SpawnTable forêt (par défaut)
         var spawnConfig = _spawnTable?.GetConfig(_currentLevel);
 
-        // Fallback legacy si pas de SpawnTable assignee
+        // SpawnTable plage (depuis BiomeDatabase)
+        LevelSpawnConfig beachConfig = null;
+        if (_biomeDatabase != null)
+        {
+            var beachTable = _biomeDatabase.GetEnemyTable(BiomeType.Beach);
+            if (beachTable != null)
+                beachConfig = beachTable.GetConfig(_currentLevel);
+        }
+
+        // Fallback legacy si pas de SpawnTable assignée
         var legacyTypes = new[]
         {
             CellContent.Enemy_Wolf,
@@ -413,20 +422,22 @@ public class GridManager : MonoBehaviour, IGridContext
             if (placed >= count) break;
             if (cell.Content != CellContent.Empty) continue;
 
+            // Choisir la SpawnTable selon le biome de la case
+            var config = (cell.Biome == BiomeType.Beach && beachConfig != null)
+                ? beachConfig : spawnConfig;
+
             CellContent type;
-            if (spawnConfig != null)
+            if (config != null)
             {
-                // Rouler jusqu a obtenir un type non-trap
-                // (les traps sont places par PlaceDangers separement)
                 int attempts = 0;
                 do
                 {
-                    type = spawnConfig.Roll();
+                    type = config.Roll();
                     attempts++;
                 } while (type == CellContent.Trap && attempts < 10);
 
                 if (type == CellContent.Trap)
-                    type = CellContent.Enemy_Wolf; // Ultime fallback
+                    type = CellContent.Enemy_Wolf;
             }
             else
             {
@@ -435,12 +446,10 @@ public class GridManager : MonoBehaviour, IGridContext
 
             cell.Content = type;
             placed++;
-            //Debug.Log("[GridManager] Place " + type + " en (" + cell.X + "," + cell.Y + ")");
         }
 
         if (spawnConfig == null)
-            Debug.LogWarning("[GridManager] Aucune EnemySpawnTable assignee - utilisation du fallback");
-
+            Debug.LogWarning("[GridManager] Aucune EnemySpawnTable assignée — fallback");
     }
 
     private void PlaceContentRandom(int count, HashSet<(int, int)> excluded, System.Action<Cell> placer)

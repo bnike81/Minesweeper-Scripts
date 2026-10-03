@@ -23,7 +23,7 @@ public enum CellContent
     Enemy_Mercenary = 12,
     Enemy_BanditSword = 13,
     Enemy_BanditArcher = 14,
-    Enemy_CoralReef = 15,
+    Enemy_Crab = 15,
     Enemy_Spider = 16,
     Enemy_Bat = 17,
     Enemy_GoblinLance = 18,

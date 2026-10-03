@@ -75,6 +75,20 @@ public class CaveSpriteSet : ScriptableObject
     [Header("═══ Drapeau ═══")]
     public Sprite flag;
 
+    // =========================================================================
+    // PORTAILS — Bord Bas Cave
+    // =========================================================================
+
+    [Header("═══ Portail entrée / sortie ═══")]
+    [Tooltip(
+        "Sprite 'Bord Bas Cave' (16×16) — même logique d'assemblage qu'un bord bas classique.\n" +
+        "Utilisé pour L'ENTRÉE (bas de la grotte, y=0) ET LA SORTIE (haut, y=Height-1).\n" +
+        "Ce sprite remplace entièrement les anciens portalEntry / portalExit.\n" +
+        "Il se pose sur la case MUR du portail, exactement comme un bord bas ordinaire.")]
+    public Sprite bordBasCave;
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
     /// <summary>Retourne le sprite du nombre (1-8).</summary>
     public Sprite GetNumberSprite(int n) => n switch
     {
@@ -88,8 +102,4 @@ public class CaveSpriteSet : ScriptableObject
         8 => number8,
         _ => null
     };
-
-    [Header("═══ Portails ═══")]
-    public Sprite portalEntry;
-    public Sprite portalExit;
 }

@@ -2,14 +2,9 @@
 using System.Collections.Generic;
 
 /// <summary>
-/// UndergroundFog — Fog dense avec 3 niveaux :
-///   1. Fog total (0.95) — zones inexplorées
-///   2. Fog partiel (0.60) — zones déjà visitées
-///   3. Pas de fog — zone de vision actuelle du héros
-///
-/// Couvre TOUTE la grille (même dimensions que GridManager).
-/// Les murs et sols sont tous cachés au départ.
-/// Le fog se retire quand le héros approche.
+/// UndergroundFog — Fog dense avec 3 niveaux.
+/// Supporte le mode additif via Extend() : ajoute du fog pour une nouvelle cave
+/// sans effacer le fog existant.
 /// </summary>
 public class UndergroundFog : MonoBehaviour
 {
@@ -26,12 +21,12 @@ public class UndergroundFog : MonoBehaviour
 
     private readonly Dictionary<(int, int), SpriteRenderer> _overlays = new();
     private readonly HashSet<(int, int)> _visited = new();
-    private readonly HashSet<(int, int)> _caveCells = new(); // cases grotte (sol + mur contour)
+    private readonly HashSet<(int, int)> _caveCells = new();
     private Sprite _whiteSprite;
     private Material _fogMaterial;
 
     // =========================================================================
-    // GÉNÉRATION — couvre toute la grille
+    // GÉNÉRATION — première cave (efface tout et recrée)
     // =========================================================================
 
     public void Generate(UndergroundGrid grid)
@@ -41,20 +36,16 @@ public class UndergroundFog : MonoBehaviour
 
         CreateSprite();
 
-        var gm = GridManager.Instance;
-        if (gm == null) return;
-
-        float cs = gm.CellSize;
-        int gridW = gm.Width;
-        int gridH = gm.Height;
+        float cs = grid.CellSize;
         Color full = new Color(_fogColor.r, _fogColor.g, _fogColor.b, _fogFull);
 
-        // Couvrir TOUTE la zone (murs, sols, tout)
-        for (int x = 0; x < gridW; x++)
-            for (int y = 0; y < gridH; y++)
+        // Couvrir toute la zone
+        for (int x = 0; x < grid.Width; x++)
+            for (int y = 0; y < grid.Height; y++)
             {
-                Vector3 pos = grid.GridToWorld(x, y, -0.05f);
+                if (_overlays.ContainsKey((x, y))) continue;
 
+                Vector3 pos = grid.GridToWorld(x, y, -0.05f);
                 var go = new GameObject("UF");
                 go.transform.position = pos;
                 go.transform.localScale = new Vector3(cs, cs, 1f);
@@ -70,27 +61,91 @@ public class UndergroundFog : MonoBehaviour
                 _overlays[(x, y)] = sr;
             }
 
-        // Identifier les cases de la grotte (sol + mur contour) pour UpdateVision
+        // Identifier les cave cells via le GRID (pas le layout)
         _visited.Clear();
         _caveCells.Clear();
+        CollectCaveCells(grid);
 
-        // Chercher le layout via CaveGenerator
-        var caveGen = FindObjectOfType<CaveGenerator>(true);
-        if (caveGen?.Layout != null && grid != null)
-        {
-            for (int cx = 0; cx < grid.Width; cx++)
-                for (int cy = 0; cy < grid.Height; cy++)
-                {
-                    if (caveGen.Layout.IsFloor(cx, cy) || CaveAutoTiler.IsWallContour(caveGen.Layout, cx, cy))
-                        _caveCells.Add((cx, cy));
-                }
-        }
-
-        Debug.Log($"[UndergroundFog] ✅ {_overlays.Count} fog, {_caveCells.Count} cave cells, vision={_visionRadius}");
+        Debug.Log($"[UndergroundFog] ✅ {_overlays.Count} fog, {_caveCells.Count} cave cells");
     }
 
     // =========================================================================
-    // MISE À JOUR VISION — 3 niveaux de fog
+    // EXTEND — ajouter du fog pour une cave additionnelle
+    // Ne détruit PAS le fog existant. Ajoute des overlays si la grille a grandi.
+    // Ajoute les cave cells du nouveau layout.
+    // =========================================================================
+
+    public void Extend(UndergroundGrid grid, CaveLayout newLayout)
+    {
+        if (grid == null) return;
+
+        CreateSprite();
+
+        float cs = grid.CellSize;
+        Color full = new Color(_fogColor.r, _fogColor.g, _fogColor.b, _fogFull);
+
+        // Ajouter des overlays pour les nouvelles cases (grille agrandie)
+        for (int x = 0; x < grid.Width; x++)
+            for (int y = 0; y < grid.Height; y++)
+            {
+                if (_overlays.ContainsKey((x, y))) continue;
+
+                Vector3 pos = grid.GridToWorld(x, y, -0.05f);
+                var go = new GameObject("UF");
+                go.transform.position = pos;
+                go.transform.localScale = new Vector3(cs, cs, 1f);
+                go.transform.SetParent(transform);
+
+                var sr = go.AddComponent<SpriteRenderer>();
+                sr.sprite = _whiteSprite;
+                sr.sharedMaterial = _fogMaterial;
+                sr.color = full;
+                sr.sortingLayerName = _sortingLayer;
+                sr.sortingOrder = _sortingOrder;
+
+                _overlays[(x, y)] = sr;
+            }
+
+        // Ajouter les cave cells du nouveau layout
+        for (int x = 0; x < newLayout.Width; x++)
+            for (int y = 0; y < newLayout.Height; y++)
+            {
+                if (newLayout.IsFloor(x, y) || CaveAutoTiler.IsWallContour(newLayout, x, y))
+                    _caveCells.Add((x, y));
+            }
+
+        Debug.Log($"[UndergroundFog] ✅ Extend : {_overlays.Count} fog, {_caveCells.Count} cave cells");
+    }
+
+    // =========================================================================
+    // COLLECTE — identifie les cave cells via le grid (sol + contour)
+    // =========================================================================
+
+    private void CollectCaveCells(UndergroundGrid grid)
+    {
+        // Utiliser le grid directement — fonctionne pour toutes les caves
+        for (int x = 0; x < grid.Width; x++)
+            for (int y = 0; y < grid.Height; y++)
+            {
+                if (grid.IsFloor(x, y))
+                { _caveCells.Add((x, y)); continue; }
+
+                // Mur de contour : mur avec au moins un voisin sol
+                if (!grid.IsFloor(x, y))
+                {
+                    bool adjFloor = false;
+                    if (grid.IsFloor(x - 1, y) || grid.IsFloor(x + 1, y) ||
+                        grid.IsFloor(x, y - 1) || grid.IsFloor(x, y + 1) ||
+                        grid.IsFloor(x - 1, y - 1) || grid.IsFloor(x + 1, y - 1) ||
+                        grid.IsFloor(x - 1, y + 1) || grid.IsFloor(x + 1, y + 1))
+                        adjFloor = true;
+                    if (adjFloor) _caveCells.Add((x, y));
+                }
+            }
+    }
+
+    // =========================================================================
+    // MISE À JOUR VISION
     // =========================================================================
 
     public void UpdateVision(int heroX, int heroY)
@@ -98,7 +153,6 @@ public class UndergroundFog : MonoBehaviour
         int fullR = _visionRadius;
         int fadeR = _visionRadius + _partialRadius;
 
-        // Marquer la zone actuelle comme visitée
         for (int dx = -fullR; dx <= fullR; dx++)
             for (int dy = -fullR; dy <= fullR; dy++)
             {
@@ -106,7 +160,6 @@ public class UndergroundFog : MonoBehaviour
                     _visited.Add((heroX + dx, heroY + dy));
             }
 
-        // Mettre à jour chaque overlay
         Color fullColor = new Color(_fogColor.r, _fogColor.g, _fogColor.b, _fogFull);
         Color visitedColor = new Color(_fogColor.r, _fogColor.g, _fogColor.b, _fogVisited);
 
@@ -116,7 +169,6 @@ public class UndergroundFog : MonoBehaviour
             var sr = kvp.Value;
             if (sr == null) continue;
 
-            // Cases hors de la grotte → TOUJOURS fog total (au-delà des murs)
             if (!_caveCells.Contains((x, y)))
             {
                 sr.gameObject.SetActive(true);
@@ -128,12 +180,10 @@ public class UndergroundFog : MonoBehaviour
 
             if (dist <= fullR)
             {
-                // Vision claire → pas de fog
                 sr.gameObject.SetActive(false);
             }
             else if (dist <= fadeR)
             {
-                // Transition douce
                 sr.gameObject.SetActive(true);
                 float t = (float)(dist - fullR) / Mathf.Max(1, _partialRadius);
                 float alpha = Mathf.Lerp(0f, _fogVisited, t);
@@ -141,13 +191,11 @@ public class UndergroundFog : MonoBehaviour
             }
             else if (_visited.Contains((x, y)))
             {
-                // Déjà visité → 60%
                 sr.gameObject.SetActive(true);
                 sr.color = visitedColor;
             }
             else
             {
-                // Case grotte non visitée → fog total
                 sr.gameObject.SetActive(true);
                 sr.color = fullColor;
             }
@@ -180,6 +228,7 @@ public class UndergroundFog : MonoBehaviour
         }
         _overlays.Clear();
         _visited.Clear();
+        _caveCells.Clear();
 
         for (int i = transform.childCount - 1; i >= 0; i--)
         {

@@ -2,276 +2,327 @@
 using System.Collections.Generic;
 
 /// <summary>
-/// CaveLayout — Génère le plan sol/mur de la grotte.
+/// CaveLayout — Génération structurelle cave, fidèle au chapitre 2.
 ///
-/// Phase 1 du WFC : placement structurel.
-///   1. Placer les portails (entrée bas, sortie haut)
-///   2. Placer la grande salle (village goblin) au centre
-///   3. Placer les petites salles aléatoirement
-///   4. Connecter toutes les salles par des couloirs (2-4 cases de large)
-///   5. Ajouter des impasses pour le loot
-///   6. Vérifier la connectivité (flood fill)
-///
-/// Résultat : bool[width, height] où true = sol marchable, false = mur
+/// MODIFICATION ADDITIVE : Height = assez grand pour les Y surface.
+/// EntryLocalY = entryPortalY directement (pas centré Height/2).
+/// Chaque cave occupe sa propre zone Y — pas de chevauchement.
 /// </summary>
 public class CaveLayout
 {
     public int Width { get; }
     public int Height { get; }
 
-    // true = sol (marchable), false = mur
     private readonly bool[,] _floor;
 
-    // Salles placées (pour connexion et placement ennemi/village)
     public readonly List<RectInt> Rooms = new();
     public RectInt LargeRoom { get; private set; }
 
-    // Portails
     public Vector2Int EntryPos { get; private set; }
     public Vector2Int ExitPos { get; private set; }
+    public int EntryLocalY { get; private set; }
+    public int ExitLocalY { get; private set; }
 
     private System.Random _rng;
+    private int _epx, _xpx;
+    private int _pw;
 
     public bool IsFloor(int x, int y) =>
         x >= 0 && x < Width && y >= 0 && y < Height && _floor[x, y];
-
     public bool[,] GetFloorMap() => _floor;
-
-    // =========================================================================
-    // GÉNÉRATION
-    // =========================================================================
+    public bool IsPortalEntry(int x, int y) => x == EntryPos.x && y == EntryPos.y;
+    public bool IsPortalExit(int x, int y) => x == ExitPos.x && y == ExitPos.y;
 
     public CaveLayout(CaveConfig config, Vector2Int entryPortal, Vector2Int exitPortal)
+        : this(config, entryPortal.x, 0, exitPortal.x, config.height - 1, false) { }
+
+    public CaveLayout(CaveConfig config,
+                      int entryPortalX, int entryPortalY,
+                      int exitPortalX, int exitPortalY,
+                      bool isTwoWay = false)
     {
-        // Dimensions = même largeur que GridManager, hauteur limitée au max de la grille
-        int maxHeight = GridManager.Instance?.Height ?? config.height;
         Width = GridManager.Instance?.Width ?? config.width;
-        Height = Mathf.Min(config.height, maxHeight);
+
+        // ── MODIFIÉ : Height assez grand pour les Y surface ───────────────────
+        int maxY = Mathf.Max(entryPortalY, exitPortalY);
+        Height = Mathf.Max(maxY + config.height / 2 + 10,
+                           GridManager.Instance?.Height ?? config.height);
+
         _floor = new bool[Width, Height];
-        _rng = config.seed >= 0
-            ? new System.Random(config.seed)
-            : new System.Random();
+        _rng = config.seed >= 0 ? new System.Random(config.seed) : new System.Random();
+        _pw = Mathf.Clamp(config.portalWidth, 1, 3);
 
-        // Positions des portails (forcées sur les bords)
-        EntryPos = new Vector2Int(
-            Mathf.Clamp(entryPortal.x, 1, Width - config.portalWidth - 1), 0);
-        ExitPos = new Vector2Int(
-            Mathf.Clamp(exitPortal.x, 1, Width - config.portalWidth - 1), Height - 1);
+        _epx = Mathf.Clamp(entryPortalX, 2, Width - _pw - 2);
+        _xpx = Mathf.Clamp(exitPortalX, 2, Width - _pw - 2);
 
-        // ── 1. Creuser les portails (1 case de large, connectés par un couloir) ─
-        // Entrée (bas) : 1 case porte à y=0, puis couloir de 3 cases vers l'intérieur
-        // La case (EntryPos.x, 0) est le sprite porte (portalEntry)
-        // Les cases autour sont des murs qui ferment le contour
-        CarveRect(EntryPos.x, 0, 1, 4);
-        // Élargir le couloir d'entrée à 2 cases minimum
-        CarveRect(EntryPos.x, 1, 2, 3);
+        // ── MODIFIÉ : Y locaux = Y surface directement ────────────────────────
+        // Cave 1 (entryY=30, exitY=60) → EntryLocalY=30, ExitLocalY=60
+        // Cave 2 (entryY=121, isTwoWay) → EntryLocalY=121, ExitLocalY=129
+        // Pas de centrage Height/2 → chaque cave à sa propre zone Y
+        const int marge = 4;
+        int deltaY = isTwoWay ? 8 : Mathf.Abs(exitPortalY - entryPortalY);
+        int baseY = Mathf.Min(entryPortalY, exitPortalY);
 
-        // Sortie (haut) : 1 case porte à y=Height-1, couloir de 3 cases
-        CarveRect(ExitPos.x, Height - 4, 2, 3);
-        CarveRect(ExitPos.x, Height - 1, 1, 1); // porte = 1 case
+        if (isTwoWay)
+        {
+            EntryLocalY = Mathf.Clamp(baseY, marge, Height - marge - 1);
+            ExitLocalY = Mathf.Clamp(EntryLocalY + 8, EntryLocalY + 4, Height - marge - 1);
+        }
+        else
+        {
+            EntryLocalY = Mathf.Clamp(baseY, marge, Height - deltaY - marge - 1);
+            ExitLocalY = Mathf.Clamp(baseY + deltaY, EntryLocalY + 8, Height - marge - 1);
+        }
 
-        // ── 2. Grande salle (village goblin) — toujours au centre ────────────
+        // ── TOUT LE RESTE IDENTIQUE AU DOC 17 ────────────────────────────────
+
+        EntryPos = new Vector2Int(_epx, EntryLocalY);
+        ExitPos = new Vector2Int(_xpx, ExitLocalY);
+
+        CarvePortalJunction(_epx, EntryLocalY, config);
+        CarvePortalJunction(_xpx, ExitLocalY, config);
+
         if (config.alwaysLargeRoom)
         {
-            int lrx = (Width - config.largeRoomWidth) / 2;
-            int lry = Height / 2 - config.largeRoomHeight / 2;
-            LargeRoom = new RectInt(lrx, lry, config.largeRoomWidth, config.largeRoomHeight);
+            int lw = config.largeRoomWidth;
+            int lh = config.largeRoomHeight;
+            int lrx = Mathf.Clamp(Width / 2 - lw / 2, 1, Width - lw - 1);
+            int mid = (EntryLocalY + ExitLocalY) / 2;
+            int lry = Mathf.Clamp(mid - lh / 2, EntryLocalY + 4, ExitLocalY - lh - 1);
+            lry = Mathf.Max(lry, 2);
+            LargeRoom = new RectInt(lrx, lry, lw, lh);
             CarveRoom(LargeRoom);
         }
 
-        // ── 3. Petites salles ────────────────────────────────────────────────
         for (int i = 0; i < config.smallRoomCount; i++)
         {
-            var room = TryPlaceSmallRoom(config, 30);
-            if (room.HasValue)
-                CarveRoom(room.Value);
+            var room = TryPlaceSmallRoom(config, 40);
+            if (room.HasValue) CarveRoom(room.Value);
         }
 
-        // ── 4. Connecter les salles ──────────────────────────────────────────
         ConnectAll(config);
 
-        // ── 5. Impasses ──────────────────────────────────────────────────────
-        // Impasses espacées (distance min 6 entre chaque)
         var deadEndPositions = new List<Vector2Int>();
         for (int i = 0; i < config.deadEndCount; i++)
-            CarveDeadEnd(config, deadEndPositions, minDistance: 6);
+            CarveDeadEnd(config, deadEndPositions);
 
-        // ── 6. Post-traitement : formes organiques ─────────────────────────
-        RoundRoomCorners();
-        WidenNarrowPassages();
-        SmoothWalls();
-
-        // ── 7. Vérifier connectivité (après post-traitement) ─────────────
         EnsureConnectivity();
+        EnforceBorders();
 
-        Debug.Log($"[CaveLayout] Grotte {Width}×{Height} générée : " +
-                  $"{Rooms.Count} salles, entrée={EntryPos}, sortie={ExitPos}");
+        StampPortalEdgeS(_epx, EntryLocalY);
+        StampPortalEdgeS(_xpx, ExitLocalY);
+
+        Debug.Log($"[CaveLayout] {Width}×{Height} {Rooms.Count} salles | " +
+                  $"Entry=({EntryPos.x},{EntryPos.y}) Exit=({ExitPos.x},{ExitPos.y})");
     }
 
     // =========================================================================
-    // SALLE
+    // CARVE PORTAL JUNCTION — identique doc 17
     // =========================================================================
 
-    private RectInt? TryPlaceSmallRoom(CaveConfig config, int maxAttempts)
+    private void CarvePortalJunction(int px, int py, CaveConfig config)
     {
-        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        int jw = Mathf.Max(4, config.corridorMaxWidth + 2);
+
+        for (int dx = -1; dx <= 1; dx++)
         {
-            int w = _rng.Next(config.smallRoomMin, config.smallRoomMax + 1);
-            int h = _rng.Next(config.smallRoomMin, config.smallRoomMax + 1);
-            int x = _rng.Next(1, Width - w - 1);
-            int y = _rng.Next(4, Height - h - 4); // éviter les bords portails
-
-            var room = new RectInt(x, y, w, h);
-
-            // Vérifier qu'elle ne chevauche pas une salle existante (marge 2)
-            bool overlap = false;
-            foreach (var r in Rooms)
-            {
-                if (r.Overlaps(Expand(room, 2)))
-                { overlap = true; break; }
-            }
-            if (overlap) continue;
-
-            return room;
+            SetFloor(px + dx, py + 1);
+            SetFloor(px + dx, py + 2);
         }
-        return null;
-    }
 
-    private void CarveRoom(RectInt room)
-    {
-        CarveRect(room.x, room.y, room.width, room.height);
-        Rooms.Add(room);
+        for (int i = 2; i <= jw; i++)
+        {
+            SetFloor(px - i, py + 1);
+            SetFloor(px - i, py + 2);
+            SetFloor(px - i, py + 3);
+        }
+
+        for (int i = 2; i <= jw; i++)
+        {
+            SetFloor(px + i, py + 1);
+            SetFloor(px + i, py + 2);
+            SetFloor(px + i, py + 3);
+        }
+
+        for (int i = -jw; i <= jw; i++)
+            SetFloor(px + i, py + 3);
     }
 
     // =========================================================================
-    // COULOIRS — connexion entre salles
+    // STAMP PORTAL edgeS — identique doc 17
+    // =========================================================================
+
+    private void StampPortalEdgeS(int px, int py)
+    {
+        if (!InBounds(px, py)) return;
+
+        _floor[px, py] = false;
+        if (InBounds(px - 1, py)) _floor[px - 1, py] = false;
+        if (InBounds(px + 1, py)) _floor[px + 1, py] = false;
+
+        for (int dy = -1; dy >= -3; dy--)
+            if (InBounds(px, py + dy))
+                _floor[px, py + dy] = false;
+
+        if (InBounds(px, py + 1) && py + 1 < Height - 1)
+            _floor[px, py + 1] = true;
+    }
+
+    // =========================================================================
+    // CONNEXION — identique doc 17
     // =========================================================================
 
     private void ConnectAll(CaveConfig config)
     {
-        // Points à connecter : entrée, sortie, centre de chaque salle
-        var points = new List<Vector2Int>();
-        points.Add(new Vector2Int(EntryPos.x + 1, 2));  // juste au-dessus du portail entrée
-        foreach (var room in Rooms)
-            points.Add(new Vector2Int(room.x + room.width / 2, room.y + room.height / 2));
-        points.Add(new Vector2Int(ExitPos.x + 1, Height - 3)); // juste en-dessous du portail sortie
+        var pts = new List<Vector2Int>();
 
-        // Connecter séquentiellement (entrée → salle 1 → salle 2 → ... → sortie)
-        // Trier par Y pour un parcours logique du bas vers le haut
-        points.Sort((a, b) => a.y.CompareTo(b.y));
+        int entryLateralX = _epx < Width / 2 ? _epx + 3 : _epx - 3;
+        entryLateralX = Mathf.Clamp(entryLateralX, 2, Width - 3);
+        pts.Add(new Vector2Int(entryLateralX, EntryLocalY + 2));
 
-        for (int i = 0; i < points.Count - 1; i++)
+        foreach (var r in Rooms)
+            pts.Add(new Vector2Int(r.x + r.width / 2, r.y + r.height / 2));
+
+        int exitLateralX = _xpx < Width / 2 ? _xpx + 3 : _xpx - 3;
+        exitLateralX = Mathf.Clamp(exitLateralX, 2, Width - 3);
+        pts.Add(new Vector2Int(exitLateralX, ExitLocalY + 2));
+
+        pts.Sort((a, b) => a.y.CompareTo(b.y));
+
+        for (int i = 0; i < pts.Count - 1; i++)
         {
-            int corridorW = _rng.Next(config.corridorMinWidth, config.corridorMaxWidth + 1);
-            CarveCorridor(points[i], points[i + 1], corridorW);
+            int w = _rng.Next(config.corridorMinWidth, config.corridorMaxWidth + 1);
+            CarveCorridor(pts[i], pts[i + 1], w);
         }
     }
 
-    /// <summary>
-    /// Creuse un couloir pas-à-pas entre deux points.
-    /// Utilise des déplacements diagonaux (x±1,y±1) pour des courbes douces.
-    /// L'épaisseur varie entre 2 et corridorWidth le long du tracé.
-    /// </summary>
-    private void CarveCorridor(Vector2Int from, Vector2Int to, int corridorWidth)
+    // =========================================================================
+    // COULOIRS ORGANIQUES — identique doc 17
+    // =========================================================================
+
+    private void CarveCorridor(Vector2Int from, Vector2Int to, int thick)
     {
         int cx = from.x, cy = from.y;
-        int thick = Mathf.Max(2, corridorWidth);
+        int steps = 0, maxSteps = (Width + Height) * 3;
 
-        int steps = 0;
-        int maxSteps = (Width + Height) * 2; // sécurité anti-boucle
-
-        while ((cx != to.x || cy != to.y) && steps < maxSteps)
+        while ((cx != to.x || cy != to.y) && steps++ < maxSteps)
         {
-            steps++;
-
-            // Creuser un carré d'épaisseur variable à la position courante
-            int w = Mathf.Max(2, thick + _rng.Next(-1, 2)); // varier ±1
-            w = Mathf.Min(w, 4); // cap à 4
-            for (int dx = 0; dx < w; dx++)
-                for (int dy = 0; dy < w; dy++)
+            int w = Mathf.Clamp(thick, 2, 4);
+            int half = (w - 1) / 2;
+            for (int dx = -half; dx <= half; dx++)
+                for (int dy = -half; dy <= half; dy++)
                     SetFloor(cx + dx, cy + dy);
 
-            // Direction vers la cible
-            int diffX = to.x - cx;
-            int diffY = to.y - cy;
+            int dX = to.x - cx;
+            int dY = to.y - cy;
 
-            // Choix du prochain pas — favorise les diagonales pour des courbes douces
-            if (diffX != 0 && diffY != 0 && _rng.Next(100) < 60)
+            if (dX != 0 && dY != 0)
             {
-                // Pas diagonal (60% de chance quand on peut)
-                cx += (diffX > 0) ? 1 : -1;
-                cy += (diffY > 0) ? 1 : -1;
+                if (_rng.Next(100) < 55)
+                { cx += dX > 0 ? 1 : -1; cy += dY > 0 ? 1 : -1; }
+                else if (Mathf.Abs(dY) >= Mathf.Abs(dX))
+                { cy += dY > 0 ? 1 : -1; }
+                else
+                { cx += dX > 0 ? 1 : -1; }
             }
-            else if (Mathf.Abs(diffY) > Mathf.Abs(diffX))
+            else if (dY != 0)
             {
-                // Plus loin en Y → avancer en Y (+ léger zigzag X)
-                cy += (diffY > 0) ? 1 : -1;
-                if (_rng.Next(100) < 25 && diffX != 0)
-                    cx += (diffX > 0) ? 1 : -1;
+                cy += dY > 0 ? 1 : -1;
+                if (_rng.Next(100) < 25 && dX == 0)
+                    cx += _rng.Next(2) == 0 ? 1 : -1;
             }
             else
             {
-                // Plus loin en X → avancer en X (+ léger zigzag Y)
-                cx += (diffX > 0) ? 1 : -1;
-                if (_rng.Next(100) < 25 && diffY != 0)
-                    cy += (diffY > 0) ? 1 : -1;
+                cx += dX > 0 ? 1 : -1;
+                if (_rng.Next(100) < 25 && dY == 0)
+                    cy += _rng.Next(2) == 0 ? 1 : -1;
             }
 
-            cx = Mathf.Clamp(cx, 0, Width - thick);
-            cy = Mathf.Clamp(cy, 0, Height - thick);
+            cx = Mathf.Clamp(cx, 1, Width - thick - 1);
+            cy = Mathf.Clamp(cy, 1, Height - thick - 1);
         }
-    }
 
-    private void CarveHLine(int x1, int x2, int y, int thickness)
-    {
-        int minX = Mathf.Min(x1, x2);
-        int maxX = Mathf.Max(x1, x2);
-        for (int x = minX; x <= maxX; x++)
-            for (int t = 0; t < thickness; t++)
-                SetFloor(x, y + t);
-    }
-
-    private void CarveVLine(int x, int y1, int y2, int thickness)
-    {
-        int minY = Mathf.Min(y1, y2);
-        int maxY = Mathf.Max(y1, y2);
-        for (int y = minY; y <= maxY; y++)
-            for (int t = 0; t < thickness; t++)
-                SetFloor(x + t, y);
+        int fw = Mathf.Clamp(thick, 2, 4);
+        int fhalf = (fw - 1) / 2;
+        for (int dx = -fhalf; dx <= fhalf; dx++)
+            for (int dy = -fhalf; dy <= fhalf; dy++)
+                SetFloor(to.x + dx, to.y + dy);
     }
 
     // =========================================================================
-    // IMPASSES
+    // SALLES — identique doc 17
     // =========================================================================
 
-    private void CarveDeadEnd(CaveConfig config, List<Vector2Int> existing, int minDistance)
+    private RectInt? TryPlaceSmallRoom(CaveConfig config, int maxAttempts)
     {
-        for (int attempt = 0; attempt < 50; attempt++)
+        for (int a = 0; a < maxAttempts; a++)
+        {
+            int w = _rng.Next(config.smallRoomMin, config.smallRoomMax + 1);
+            int h = _rng.Next(config.smallRoomMin, config.smallRoomMax + 1);
+            int x = _rng.Next(1, Width - w - 1);
+            // Contraindre entre les portails (zone de génération active)
+            int minGenY = Mathf.Max(2, EntryLocalY - 4);
+            int maxGenY = Mathf.Min(Height - h - 2, ExitLocalY + 4);
+            if (maxGenY <= minGenY) continue;
+            int y = _rng.Next(minGenY, maxGenY);
+
+            var room = new RectInt(x, y, w, h);
+
+            if (Overlaps(room, _epx, EntryLocalY, 3)) continue;
+            if (Overlaps(room, _xpx, ExitLocalY, 3)) continue;
+
+            bool ov = false;
+            foreach (var r in Rooms) if (r.Overlaps(Expand(room, 2))) { ov = true; break; }
+            if (!ov) return room;
+        }
+        return null;
+    }
+
+    private bool Overlaps(RectInt room, int px, int py, int margin) =>
+        room.x <= px + margin && room.x + room.width >= px - margin &&
+        room.y <= py + margin && room.y + room.height >= py - margin;
+
+    private void CarveRoom(RectInt room)
+    {
+        for (int x = room.x; x < room.x + room.width; x++)
+            for (int y = room.y; y < room.y + room.height; y++)
+                SetFloor(x, y);
+        Rooms.Add(room);
+    }
+
+    // =========================================================================
+    // IMPASSES — identique doc 17
+    // =========================================================================
+
+    private void CarveDeadEnd(CaveConfig config, List<Vector2Int> existing)
+    {
+        for (int attempt = 0; attempt < 60; attempt++)
         {
             int x = _rng.Next(2, Width - 2);
-            int y = _rng.Next(5, Height - 5);
+            // Contraindre entre les portails
+            int minGenY = Mathf.Max(2, EntryLocalY - 4);
+            int maxGenY = Mathf.Min(Height - 2, ExitLocalY + 4);
+            if (maxGenY <= minGenY) continue;
+            int y = _rng.Next(minGenY, maxGenY);
 
             if (_floor[x, y]) continue;
             if (!HasAdjacentFloor(x, y)) continue;
 
-            // Vérifier distance avec les autres impasses
+            if (Mathf.Abs(x - _epx) < 2 && Mathf.Abs(y - EntryLocalY) < 3) continue;
+            if (Mathf.Abs(x - _xpx) < 2 && Mathf.Abs(y - ExitLocalY) < 3) continue;
+
             bool tooClose = false;
             foreach (var ep in existing)
-            {
-                if (Mathf.Abs(ep.x - x) + Mathf.Abs(ep.y - y) < minDistance)
-                { tooClose = true; break; }
-            }
+                if (Mathf.Abs(ep.x - x) + Mathf.Abs(ep.y - y) < 5) { tooClose = true; break; }
             if (tooClose) continue;
 
-            // Direction : s'éloigner du sol le plus proche
             var dir = GetAwayDirection(x, y);
             int len = _rng.Next(3, config.deadEndLength + 1);
             int w = config.corridorMinWidth;
 
             for (int i = 0; i < len; i++)
             {
-                int nx = x + dir.x * i;
-                int ny = y + dir.y * i;
+                int nx = x + dir.x * i, ny = y + dir.y * i;
                 for (int t = 0; t < w; t++)
                 {
                     if (dir.x != 0) SetFloor(nx, ny + t);
@@ -284,16 +335,24 @@ public class CaveLayout
     }
 
     // =========================================================================
-    // CONNECTIVITÉ
+    // CONNECTIVITÉ — identique doc 17
     // =========================================================================
 
     private void EnsureConnectivity()
     {
-        // Flood fill depuis l'entrée
+        var start = new Vector2Int(_epx, EntryLocalY + 1);
+        if (!IsFloor(start.x, start.y))
+        {
+            bool found = false;
+            for (int dy = 1; dy <= 5 && !found; dy++)
+                for (int dx = -2; dx <= _pw + 1 && !found; dx++)
+                    if (IsFloor(_epx + dx, EntryLocalY + dy))
+                    { start = new Vector2Int(_epx + dx, EntryLocalY + dy); found = true; }
+        }
+
         var visited = new bool[Width, Height];
         var queue = new Queue<Vector2Int>();
-        queue.Enqueue(EntryPos);
-        visited[EntryPos.x, EntryPos.y] = true;
+        if (InBounds(start.x, start.y)) { queue.Enqueue(start); visited[start.x, start.y] = true; }
 
         while (queue.Count > 0)
         {
@@ -301,213 +360,77 @@ public class CaveLayout
             foreach (var d in _dirs4)
             {
                 int nx = p.x + d.x, ny = p.y + d.y;
-                if (nx < 0 || nx >= Width || ny < 0 || ny >= Height) continue;
-                if (visited[nx, ny] || !_floor[nx, ny]) continue;
-                visited[nx, ny] = true;
-                queue.Enqueue(new Vector2Int(nx, ny));
+                if (!InBounds(nx, ny) || visited[nx, ny] || !_floor[nx, ny]) continue;
+                visited[nx, ny] = true; queue.Enqueue(new Vector2Int(nx, ny));
             }
         }
 
-        // Vérifier que la sortie est accessible
-        if (!visited[ExitPos.x, ExitPos.y])
+        var exitSol = new Vector2Int(_xpx, ExitLocalY + 1);
+        if (InBounds(exitSol.x, exitSol.y) && IsFloor(exitSol.x, exitSol.y)
+            && !visited[exitSol.x, exitSol.y])
         {
-            Debug.LogWarning("[CaveLayout] Sortie non accessible ! Connexion forcée...");
-            CarveCorridor(EntryPos, ExitPos, 2);
+            Debug.LogWarning("[CaveLayout] Sortie inaccessible — connexion forcée.");
+            CarveCorridor(start, exitSol, 2);
         }
 
-        // Vérifier que toutes les salles sont accessibles
         foreach (var room in Rooms)
         {
-            int cx = room.x + room.width / 2;
-            int cy = room.y + room.height / 2;
-            if (!visited[cx, cy])
+            int cx = room.x + room.width / 2, cy = room.y + room.height / 2;
+            if (InBounds(cx, cy) && IsFloor(cx, cy) && !visited[cx, cy])
             {
-                Debug.LogWarning($"[CaveLayout] Salle ({cx},{cy}) non accessible ! Connexion...");
-                CarveCorridor(EntryPos, new Vector2Int(cx, cy), 2);
+                Debug.LogWarning($"[CaveLayout] Salle isolée ({cx},{cy}) — connexion.");
+                CarveCorridor(start, new Vector2Int(cx, cy), 2);
             }
         }
     }
 
     // =========================================================================
-    // POST-TRAITEMENT — formes organiques
+    // BORDS — identique doc 17
     // =========================================================================
 
-    /// <summary>
-    /// Arrondit les coins des salles en retirant 1-2 cases à chaque angle.
-    /// Donne un aspect caverne naturelle plutôt que rectangulaire.
-    /// </summary>
-    private void RoundRoomCorners()
+    private void EnforceBorders()
     {
-        foreach (var room in Rooms)
-        {
-            int x1 = room.x, y1 = room.y;
-            int x2 = room.x + room.width - 1, y2 = room.y + room.height - 1;
-
-            // Retirer 1 case à chaque coin SEULEMENT si pas de couloir adjacent.
-            // Un couloir adjacent = case sol HORS de la salle à côté du coin.
-            if (!HasCorridorNearCorner(x1, y1, -1, -1) && _rng.Next(100) < 80)
-                _floor[x1, y1] = false;
-            if (!HasCorridorNearCorner(x2, y1, +1, -1) && _rng.Next(100) < 80)
-                _floor[x2, y1] = false;
-            if (!HasCorridorNearCorner(x1, y2, -1, +1) && _rng.Next(100) < 80)
-                _floor[x1, y2] = false;
-            if (!HasCorridorNearCorner(x2, y2, +1, +1) && _rng.Next(100) < 80)
-                _floor[x2, y2] = false;
-        }
-    }
-
-    /// <summary>Vérifie si un couloir passe près d'un coin de salle.</summary>
-    private bool HasCorridorNearCorner(int cx, int cy, int dx, int dy)
-    {
-        // Vérifier les 3 cases extérieures au coin
-        int nx = cx + dx, ny = cy + dy;
-        if (IsFloor(nx, cy)) return true;  // à côté horizontalement
-        if (IsFloor(cx, ny)) return true;  // à côté verticalement
-        if (IsFloor(nx, ny)) return true;  // en diagonale
-        return false;
-    }
-
-    /// <summary>
-    /// Nettoie les murs : supprime les cassures de 1 case et les murs isolés.
-    ///  - Mur avec 3+ voisins sol → devient sol (cassure dans le mur comblée)
-    ///  - Sol avec 0-1 voisin sol → devient mur (pixel isolé supprimé)
-    ///  - Mur isolé entouré de sol → devient sol
-    /// Répète jusqu'à stabilité (max 5 passes).
-    /// </summary>
-    private void SmoothWalls()
-    {
-        for (int pass = 0; pass < 5; pass++)
-        {
-            var snap = (bool[,])_floor.Clone();
-            bool changed = false;
-
-            for (int x = 1; x < Width - 1; x++)
-                for (int y = 1; y < Height - 1; y++)
-                {
-                    int floorN = CountFloorNeighbors4(snap, x, y);
-
-                    if (!snap[x, y])
-                    {
-                        // MUR avec 3+ voisins sol → cassure de 1 case → combler
-                        if (floorN >= 3)
-                        {
-                            _floor[x, y] = true;
-                            changed = true;
-                        }
-                    }
-                    else
-                    {
-                        // SOL avec 0 ou 1 voisin sol → pixel isolé → retirer
-                        if (floorN <= 1)
-                        {
-                            _floor[x, y] = false;
-                            changed = true;
-                        }
-                    }
-                }
-
-            if (!changed) break;
-        }
-    }
-
-    private int CountFloorNeighbors4(bool[,] grid, int x, int y)
-    {
-        int n = 0;
-        if (x > 0 && grid[x - 1, y]) n++;
-        if (x < Width - 1 && grid[x + 1, y]) n++;
-        if (y > 0 && grid[x, y - 1]) n++;
-        if (y < Height - 1 && grid[x, y + 1]) n++;
-        return n;
-    }
-
-    /// <summary>
-    /// Élimine les passages de 1 case de large (goulots d'étranglement).
-    /// Tout passage doit faire minimum 2 cases de large.
-    /// </summary>
-    private void WidenNarrowPassages()
-    {
-        // Plusieurs passes pour gérer les cas en cascade
-        for (int pass = 0; pass < 3; pass++)
-        {
-            var snapshot = (bool[,])_floor.Clone();
-            bool changed = false;
-
-            for (int x = 1; x < Width - 1; x++)
-                for (int y = 1; y < Height - 1; y++)
-                {
-                    if (!snapshot[x, y]) continue;
-
-                    // Passage horizontal étroit : murs au-dessus ET en-dessous
-                    bool wallAbove = !snapshot[x, y + 1];
-                    bool wallBelow = !snapshot[x, y - 1];
-                    if (wallAbove && wallBelow)
-                    {
-                        // Élargir vers le haut (ou le bas si hors limites)
-                        if (y + 1 < Height) { SetFloor(x, y + 1); changed = true; }
-                        else if (y - 1 >= 0) { SetFloor(x, y - 1); changed = true; }
-                    }
-
-                    // Passage vertical étroit : murs à gauche ET à droite
-                    bool wallLeft = !snapshot[x - 1, y];
-                    bool wallRight = !snapshot[x + 1, y];
-                    if (wallLeft && wallRight)
-                    {
-                        // Élargir vers la droite (ou la gauche)
-                        if (x + 1 < Width) { SetFloor(x + 1, y); changed = true; }
-                        else if (x - 1 >= 0) { SetFloor(x - 1, y); changed = true; }
-                    }
-                }
-
-            if (!changed) break; // stable, on arrête
-        }
+        for (int y = 0; y < Height; y++) { _floor[0, y] = false; _floor[Width - 1, y] = false; }
+        for (int x = 0; x < Width; x++) { _floor[x, 0] = false; _floor[x, Height - 1] = false; }
     }
 
     // =========================================================================
-    // HELPERS
+    // SETFLOOR — identique doc 17
     // =========================================================================
-
-    private void CarveRect(int x, int y, int w, int h)
-    {
-        for (int ix = x; ix < x + w; ix++)
-            for (int iy = y; iy < y + h; iy++)
-                SetFloor(ix, iy);
-    }
 
     private void SetFloor(int x, int y)
     {
-        if (x >= 0 && x < Width && y >= 0 && y < Height)
-            _floor[x, y] = true;
+        if (!InBounds(x, y)) return;
+        if (y == EntryLocalY && x >= _epx - 1 && x <= _epx + 1) return;
+        if (y == EntryLocalY - 1 && x == _epx) return;
+        if (y == ExitLocalY && x >= _xpx - 1 && x <= _xpx + 1) return;
+        if (y == ExitLocalY - 1 && x == _xpx) return;
+        _floor[x, y] = true;
     }
+
+    // =========================================================================
+    // HELPERS — identique doc 17
+    // =========================================================================
+
+    private bool InBounds(int x, int y) => x >= 0 && x < Width && y >= 0 && y < Height;
 
     private bool HasAdjacentFloor(int x, int y)
     {
         foreach (var d in _dirs4)
-        {
-            int nx = x + d.x, ny = y + d.y;
-            if (nx >= 0 && nx < Width && ny >= 0 && ny < Height && _floor[nx, ny])
-                return true;
-        }
+        { int nx = x + d.x, ny = y + d.y; if (InBounds(nx, ny) && _floor[nx, ny]) return true; }
         return false;
     }
 
     private Vector2Int GetAwayDirection(int x, int y)
     {
-        // Direction opposée au premier sol trouvé
         foreach (var d in _dirs4)
-        {
-            int nx = x + d.x, ny = y + d.y;
-            if (nx >= 0 && nx < Width && ny >= 0 && ny < Height && _floor[nx, ny])
-                return new Vector2Int(-d.x, -d.y);
-        }
+        { int nx = x + d.x, ny = y + d.y; if (InBounds(nx, ny) && _floor[nx, ny]) return new Vector2Int(-d.x, -d.y); }
         return Vector2Int.up;
     }
 
-    private RectInt Expand(RectInt r, int margin) =>
-        new RectInt(r.x - margin, r.y - margin,
-                    r.width + margin * 2, r.height + margin * 2);
+    private RectInt Expand(RectInt r, int m) =>
+        new RectInt(r.x - m, r.y - m, r.width + m * 2, r.height + m * 2);
 
     private static readonly Vector2Int[] _dirs4 =
-    {
-        Vector2Int.up, Vector2Int.down, Vector2Int.left, Vector2Int.right
-    };
+        { Vector2Int.up, Vector2Int.down, Vector2Int.left, Vector2Int.right };
 }

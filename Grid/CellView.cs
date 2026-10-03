@@ -48,6 +48,20 @@ public class CellView : MonoBehaviour, IPointerClickHandler, ICellView
     [Tooltip("BUISSON — tronc isolé (case en dessous ET au-dessus révélées)")]
     [SerializeField] private Sprite _treeBuissonSprite;
 
+    // ─── Sprites Palmiers Plage ───────────────────────────────────────────
+    [Header("═══ Sprites — Palmiers Plage ═══")]
+    [Tooltip("TRONC PALMIER — case cachée, case en dessous révélée")]
+    [SerializeField] private Sprite _palmTrunkSprite;
+
+    [Tooltip("CANOPÉE PALMIER — case cachée standard")]
+    [SerializeField] private Sprite _palmCanopySprite;
+
+    [Tooltip("CIME PALMIER — sommet du palmier")]
+    [SerializeField] private Sprite _palmCimeSprite;
+
+    [Tooltip("BUISSON PALMIER — buisson palmier (1 case)")]
+    [SerializeField] private Sprite _palmBushSprite;
+
     // ─── Sprites Chiffres ─────────────────────────────────────────────────────
     [Header("═══ Sprites — Chiffres Adjacence ═══")]
     [Tooltip("Sprite du chiffre 1 (sans fond, par-dessus le biome)")]
@@ -154,6 +168,11 @@ public class CellView : MonoBehaviour, IPointerClickHandler, ICellView
             _treeLayerRenderer.enabled = true;
             _treeLayerRenderer.sprite = GetTreeSprite(_treeLayer);
         }
+        else if (_cell.Biome == BiomeType.Beach)
+        {
+            _treeLayerRenderer.enabled = true;
+            _treeLayerRenderer.sprite = GetPalmSprite(_treeLayer);
+        }
         else
         {
             _treeLayerRenderer.enabled = false;
@@ -179,9 +198,12 @@ public class CellView : MonoBehaviour, IPointerClickHandler, ICellView
     private Sprite GetGroundSprite()
     {
         var gvs = GroundVariantSystem.Instance;
-        if (gvs != null)
-            return gvs.GetGroundSprite(_cell.X, _cell.Y) ?? _groundRevealedSprite;
-        return _groundRevealedSprite;
+        if (gvs == null) return _groundRevealedSprite;
+
+        if (_cell.Biome == BiomeType.Beach)
+            return gvs.GetBeachGroundSprite(_cell.X, _cell.Y) ?? _groundRevealedSprite;
+
+        return gvs.GetGroundSprite(_cell.X, _cell.Y) ?? _groundRevealedSprite;
     }
 
     private void ShowRevealed()
@@ -206,7 +228,7 @@ public class CellView : MonoBehaviour, IPointerClickHandler, ICellView
             case CellContent.Enemy_Mercenary:
             case CellContent.Enemy_BanditSword:
             case CellContent.Enemy_BanditArcher:
-            case CellContent.Enemy_CoralReef:
+            case CellContent.Enemy_Crab:
             case CellContent.Enemy_Boss:
                 SetBg(_groundRevealedSprite); HideNumber();
                 SetIcon(GetEnemySprite(_cell.Content));
@@ -343,7 +365,14 @@ public class CellView : MonoBehaviour, IPointerClickHandler, ICellView
         TreeLayerType.Buisson => _treeBuissonSprite,
         _ => _treeCanopySprite
     };
-
+    private Sprite GetPalmSprite(TreeLayerType t) => t switch
+    {
+        TreeLayerType.Trunk => _palmTrunkSprite,
+        TreeLayerType.Canopy => _palmCanopySprite,
+        TreeLayerType.Cime => _palmCimeSprite,
+        TreeLayerType.Buisson => _palmBushSprite,
+        _ => null
+    };
     private Sprite GetNumberSprite(int n) => n switch
     {
         1 => _number1Sprite,
