@@ -5,15 +5,7 @@ using System.Collections.Generic;
 /// <summary>
 /// MountainSpawner — Orchestre la génération de montagnes via WFC.
 ///
-/// NOUVEAU : utilise MountainWFCGenerator au lieu de Base/Mid/Top.
-/// La Recipe reste la même — le WFC la respecte.
-///
-/// Flow :
-///   OnGridExtended(level == spawnAtLevel)
-///     → MountainWFCGenerator.Generate(recipe, baseX, baseY, gridWidth)
-///     → parcourt les Placements
-///     → MountainBuilder.PlaceAt(type, gx, gy) pour chaque pièce
-///     → CaveEntranceTrigger attaché sur les faces cave
+/// CAVE PATCH : _caveIndex passé au MountainBuilder + GenerateCave après placement.
 /// </summary>
 public class MountainSpawner : MonoBehaviour
 {
@@ -26,6 +18,10 @@ public class MountainSpawner : MonoBehaviour
     [Header("=== Sorting ===")]
     [SerializeField] private string _sortingLayer = "CellContent";
     [SerializeField] private int _sortingOrder = 2;
+
+    [Header("=== Cave ===")]                                                 // CAVE PATCH
+    [Tooltip("Index de cave — 0 = montagne 1, 1 = montagne 2")]             // CAVE PATCH
+    [SerializeField] private int _caveIndex = 0;                             // CAVE PATCH
 
     private bool _generated = false;
     private readonly List<GameObject> _allSpawned = new(128);
@@ -135,7 +131,7 @@ public class MountainSpawner : MonoBehaviour
         var builder = new MountainBuilder(
             _sprites, gm.CellStep, gm,
             transform, _sortingLayer, _sortingOrder,
-            _allSpawned);
+            _allSpawned, _caveIndex);                                        // CAVE PATCH
 
         // Placer chaque pièce
         foreach (var p in wfc.Placements)
@@ -156,7 +152,10 @@ public class MountainSpawner : MonoBehaviour
         _lastWfc = wfc;
         _lastBuilder = builder;
 
+        // Générer la cave de cette montagne (additif si une autre existe)
+        CaveManager.Instance?.GenerateCave(_caveIndex);
+
         Debug.Log($"[MountainSpawner] WFC terminé : {wfc.Placements.Count} pièces, " +
-                  $"sommet Y={wfc.SommetY}");
+                  $"sommet Y={wfc.SommetY} cave={_caveIndex}");
     }
 }

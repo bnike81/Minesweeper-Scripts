@@ -24,6 +24,7 @@ public class CampSpawner : MonoBehaviour
     [SerializeField, Range(1, 5)] private int _edgeMargin = 3;
     [Tooltip("Demi-hauteur de la zone centrale niveau 2")]
     [SerializeField, Range(2, 8)] private int _centralRange = 5;
+    
 
     [Header("=== Probabilites de Zone ===")]
     [SerializeField, Range(0f, 1f)] private float _cornerBias = 0.35f;
@@ -77,12 +78,12 @@ public class CampSpawner : MonoBehaviour
     }
 
     // -------------------------------------------------------------------------
-    // Reserve AVANT placement des dangers (niveau 2)
+    // Reserve AVANT placement des dangers (niveau 3)
     // -------------------------------------------------------------------------
 
     private void OnGridExtending(OnGridExtending evt)
     {
-        if (_hasSpawned || evt.Level != 2) return;
+        if (_hasSpawned || evt.Level != 3) return;
 
         _cellStep = GridManager.Instance?.CellStep ?? 1.05f;
 

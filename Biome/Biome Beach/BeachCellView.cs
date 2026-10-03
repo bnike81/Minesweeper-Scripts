@@ -1,84 +1,79 @@
 ﻿using UnityEngine;
 
 /// <summary>
-/// ForestCellView — case du biome Forêt.
-/// Gère : sol procédural, arbres, chiffres, flag, spawn ennemis.
+/// BeachCellView — case du biome Plage.
+/// Hérite de CellViewBase (OnPointerClick, Refresh, ICellView inclus).
+/// Même architecture que ForestCellView.
 /// </summary>
-public class ForestCellView : CellViewBase, ITreeLayer
+public class BeachCellView : CellViewBase, ITreeLayer
 {
-    [Header("=== Sol Forêt ===")]
-    [SerializeField] private Sprite _forestGroundHidden;
-    [SerializeField] private Sprite _forestGroundRevealed;
+    [Header("=== Sol Plage ===")]
+    [SerializeField] private Sprite _beachGroundHidden;
+    [SerializeField] private Sprite _beachGroundRevealed;
 
-    [Header("=== Arbres ===")]
+    [Header("=== Palmiers ===")]
     [SerializeField] private SpriteRenderer _treeLayerRenderer;
-    [SerializeField] private Sprite _treeTrunkSprite;
-    [SerializeField] private Sprite _treeCanopySprite;
-    [SerializeField] private Sprite _treeCimeSprite;
-    [SerializeField] private Sprite _treeBuissonSprite;
+    [SerializeField] private Sprite _palmTrunkSprite;
+    [SerializeField] private Sprite _palmCanopySprite;
+    [SerializeField] private Sprite _palmCimeSprite;
+    [SerializeField] private Sprite _palmBuissonSprite;
+
+    [Header("=== Canopée Transition ===")]
+    [SerializeField] private Sprite _palmCanopyConnectTreeAbove;
+    [SerializeField] private Sprite _palmCanopyConnectTreeBelow;
 
     [Header("=== Spéciaux ===")]
     [SerializeField] private Sprite _trapSprite;
-    [SerializeField] private GameObject _trapPrefab;
 
-    [Header("=== Canopée Transition Plage ===")]
-    [Tooltip("Canopée arbre connectée à palmier AU-DESSUS")]
-    [SerializeField] private Sprite _treeCanopyConnectPalmAbove;
-    [Tooltip("Canopée arbre connectée à palmier EN-DESSOUS")]
-    [SerializeField] private Sprite _treeCanopyConnectPalmBelow;
-    public enum TreeLayerType { Canopy, Trunk, Cime, Buisson }
-    private TreeLayerType _treeLayer = TreeLayerType.Canopy;
+    private ForestCellView.TreeLayerType _treeLayer = ForestCellView.TreeLayerType.Canopy;
     private EnemyInstance _enemyInstance;
+    private bool _isCanopyTransition;
+    private bool _canopyTransitionAbove;
 
     // =========================================================================
-    // Init
+    // Init — même pattern que ForestCellView
     // =========================================================================
 
     public override void Initialize(Cell cell)
     {
-        if (_forestGroundHidden != null) _hiddenGroundSprite = _forestGroundHidden;
-        if (_forestGroundRevealed != null) _groundRevealedSprite = _forestGroundRevealed;
+        if (_beachGroundHidden != null) _hiddenGroundSprite = _beachGroundHidden;
+        if (_beachGroundRevealed != null) _groundRevealedSprite = _beachGroundRevealed;
         base.Initialize(cell);
     }
 
-    public void SetTreeLayer(TreeLayerType layer)
+    public void SetTreeLayer(ForestCellView.TreeLayerType layer)
     {
         if (_treeLayer == layer) return;
         _treeLayer = layer;
-        if (_cell?.State == CellState.Hidden) RefreshTreeLayer();
+        if (_cell != null && _cell.State == CellState.Hidden) RefreshTreeLayer();
     }
-    private bool _isCanopyTransition;
-    private bool _canopyTransitionAbove;
 
     public void SetCanopyTransition(bool isTransition, bool isAbove)
     {
         _isCanopyTransition = isTransition;
         _canopyTransitionAbove = isAbove;
-        if (_cell != null && _cell.State == CellState.Hidden)
-            RefreshTreeLayer();
+        if (_cell != null && _cell.State == CellState.Hidden) RefreshTreeLayer();
     }
 
     // =========================================================================
-    // États
+    // HIDDEN — sol sable sombre + palmier selon tree layer
     // =========================================================================
 
     protected override void ShowHidden()
     {
-        // Plateau montagne → rien
         if (_cell != null && _cell.IsMountainReserved)
         {
-            SetBg(null);
-            HideTreeLayer();
-            HideIcon();
-            HideNumber();
-            return;
+            SetBg(null); HideTreeLayer(); HideIcon(); HideNumber(); return;
         }
         SetBg(_hiddenGroundSprite);
         HideIcon();
         HideNumber();
         RefreshTreeLayer();
     }
-    
+
+    // =========================================================================
+    // FLAGGED
+    // =========================================================================
 
     protected override void ShowFlagged()
     {
@@ -88,28 +83,26 @@ public class ForestCellView : CellViewBase, ITreeLayer
         HideTreeLayer();
     }
 
-    protected override void ShowRevealed()
+    // =========================================================================
+    // REVEALED — sol procédural plage + ennemis + chiffres
+    // =========================================================================
 
+    protected override void ShowRevealed()
     {
         if (_cell != null && _cell.IsMountainReserved)
         {
-            SetBg(null);
-            HideTreeLayer();
-            HideIcon();
-            HideNumber();
-            return;
+            SetBg(null); HideTreeLayer(); HideIcon(); HideNumber(); return;
         }
 
         HideTreeLayer();
 
-        // Sol procédural
+        // Sol procédural plage
         var gvs = GroundVariantSystem.Instance;
         var ground = (gvs != null)
-            ? gvs.GetGroundSprite(_cell.X, _cell.Y) ?? _groundRevealedSprite
+            ? gvs.GetBeachGroundSprite(_cell.X, _cell.Y) ?? _groundRevealedSprite
             : _groundRevealedSprite;
         SetBg(ground);
-      
-        
+
         switch (_cell.Content)
         {
             case CellContent.Empty:
@@ -136,19 +129,15 @@ public class ForestCellView : CellViewBase, ITreeLayer
     }
 
     // =========================================================================
-    // Spawn Ennemi
+    // ENEMY SPAWN — identique à ForestCellView
     // =========================================================================
 
     private void SpawnEnemyInstance(CellContent enemyType)
     {
         if (_enemyInstance != null) return;
 
-        //Debug.Log("[ForestCellView] SpawnEnemy: " + enemyType);
-
         var db = EnemyDatabase.Instance;
         var data = db?.Get(enemyType);
-
-
 
         GameObject go;
         if (data != null && data.prefab != null)
@@ -173,49 +162,44 @@ public class ForestCellView : CellViewBase, ITreeLayer
     }
 
     // =========================================================================
-    // Arbres
+    // TREE LAYER — palmiers avec transition canopée
     // =========================================================================
 
     private void RefreshTreeLayer()
     {
         if (_treeLayerRenderer == null) return;
-        if (_cell?.Biome == BiomeType.Forest)
+        if (_cell?.Biome == BiomeType.Beach)
         {
             _treeLayerRenderer.enabled = true;
-            // Transition canopée forêt → plage
-            if (_isCanopyTransition && _treeLayer == TreeLayerType.Canopy)
+            if (_isCanopyTransition && _treeLayer == ForestCellView.TreeLayerType.Canopy)
             {
                 _treeLayerRenderer.sprite = _canopyTransitionAbove
-                    ? _treeCanopyConnectPalmAbove
-                    : _treeCanopyConnectPalmBelow;
+                    ? _palmCanopyConnectTreeAbove
+                    : _palmCanopyConnectTreeBelow;
             }
             else
             {
-                _treeLayerRenderer.sprite = GetTreeSprite(_treeLayer);
+                _treeLayerRenderer.sprite = GetPalmSprite(_treeLayer);
             }
         }
         else
-        {
-            _treeLayerRenderer.enabled = false;
-        }
+            HideTreeLayer();
     }
 
     private void HideTreeLayer()
     {
-        if (_treeLayerRenderer != null)
-            _treeLayerRenderer.enabled = false;
+        if (_treeLayerRenderer != null) _treeLayerRenderer.enabled = false;
     }
 
-    private Sprite GetTreeSprite(TreeLayerType t) => t switch
+    private Sprite GetPalmSprite(ForestCellView.TreeLayerType t) => t switch
     {
-        TreeLayerType.Trunk => _treeTrunkSprite,
-        TreeLayerType.Canopy => _treeCanopySprite,
-        TreeLayerType.Cime => _treeCimeSprite,
-        TreeLayerType.Buisson => _treeBuissonSprite,
+        ForestCellView.TreeLayerType.Trunk => _palmTrunkSprite,
+        ForestCellView.TreeLayerType.Canopy => _palmCanopySprite,
+        ForestCellView.TreeLayerType.Cime => _palmCimeSprite,
+        ForestCellView.TreeLayerType.Buisson => _palmBuissonSprite,
         _ => null
     };
-    /// <summary>Canopée arbre connectée à un palmier au-dessus.</summary>
-    public Sprite GetCanopyConnectAbove() => _treeCanopyConnectPalmAbove;
-    /// <summary>Canopée arbre connectée à un palmier en-dessous.</summary>
-    public Sprite GetCanopyConnectBelow() => _treeCanopyConnectPalmBelow;
+
+    public Sprite GetCanopyConnectAbove() => _palmCanopyConnectTreeAbove;
+    public Sprite GetCanopyConnectBelow() => _palmCanopyConnectTreeBelow;
 }

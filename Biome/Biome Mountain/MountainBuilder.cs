@@ -5,10 +5,7 @@ using System.Collections.Generic;
 /// MountainBuilder — Constructeur centralisé.
 /// Place les sprites via ancres et retourne l'ancre suivante.
 ///
-/// USAGE :
-///   var anchor = new MountainAnchor(x, y);
-///   anchor = builder.Place(PieceType.BorderSimpleL, anchor, PieceType.AngleL);
-///   anchor = builder.Place(PieceType.AngleL,        anchor, PieceType.BorderSimpleL);
+/// CAVE PATCH : _caveIndex passé via constructeur → AttachCaveEntrance.
 /// </summary>
 public class MountainBuilder
 {
@@ -27,10 +24,11 @@ public class MountainBuilder
     private readonly string _sortingLayer;
     private readonly int _sortingOrder;
     private readonly List<GameObject> _spawned;
+    private readonly int _caveIndex;                                         // CAVE PATCH
 
     public MountainBuilder(MountainSprites sprites, float cs, GridManager gm,
         Transform parent, string sortingLayer, int sortingOrder,
-        List<GameObject> spawned)
+        List<GameObject> spawned, int caveIndex = 0)                         // CAVE PATCH
     {
         _sprites = sprites;
         _cs = cs;
@@ -39,6 +37,7 @@ public class MountainBuilder
         _sortingLayer = sortingLayer;
         _sortingOrder = sortingOrder;
         _spawned = spawned;
+        _caveIndex = caveIndex;                                              // CAVE PATCH
     }
 
     // =========================================================================
@@ -124,8 +123,6 @@ public class MountainBuilder
         int gy = anchorFaceG.Y;
 
         // ── FaceG ─────────────────────────────────────────────────────────────
-        // On mémorise l'index dans _spawned AVANT PlaceSprite.
-        // PlaceSprite (h=4) ajoute 4 GOs : index [before] = dy=0 (tranche basse).
         int idxBeforeG = _spawned.Count;
         if (fG != null) PlaceSprite("FaceG_" + gx + "_" + gy, fG, gx, gy, 4);
         if (withCaveG && _spawned.Count > idxBeforeG)
@@ -161,12 +158,12 @@ public class MountainBuilder
         if (go.GetComponent<CaveEntranceTrigger>() == null)
         {
             var trig = go.AddComponent<CaveEntranceTrigger>();
-            trig.Initialize(gridX, gridY, isBottom);
+            trig.Initialize(gridX, gridY, isBottom, _caveIndex);             // CAVE PATCH
         }
 
-        CaveManager.Instance?.RegisterEntrance(gridX, gridY, isBottom);
+        CaveManager.Instance?.RegisterEntrance(gridX, gridY, isBottom, _caveIndex); // CAVE PATCH
         Debug.Log($"[CaveEntrance] Trigger posé sur {go.name} " +
-                  $"grid=({gridX},{gridY}) bas={isBottom}");
+                  $"grid=({gridX},{gridY}) bas={isBottom} cave={_caveIndex}");
     }
 
     /// <summary>
@@ -199,25 +196,22 @@ public class MountainBuilder
 
     // =========================================================================
     // PLACE SPRITE — découpe en tranches de 1 case (16×16 px)
-    // Chaque tranche est positionnée EXACTEMENT au centre de sa case.
-    // Respecte l'espacement vide (_cellSpacing) entre les cases.
     // =========================================================================
 
     private void PlaceSprite(string id, Sprite sprite, int gx, int gy, int h)
     {
         if (sprite == null) return;
 
-        float cellSize = _cs - _gm.CellSpacing;    // taille visuelle d'une case
-        int stepPx = Mathf.RoundToInt(_cs * 16f); // pas en 1/16 d'unité
+        float cellSize = _cs - _gm.CellSpacing;
+        int stepPx = Mathf.RoundToInt(_cs * 16f);
 
-        float wx = (gx * stepPx) / 16f;          // X centré sur la colonne gx
+        float wx = (gx * stepPx) / 16f;
         float scaleXf = (sprite.bounds.size.x > 0f)
                         ? cellSize / sprite.bounds.size.x
                         : 1f;
 
         if (h == 1)
         {
-            // ── Case unique : placement direct, pas de découpe ──────────────
             var go = new GameObject(id);
             go.transform.SetParent(_parent, false);
             var sr = go.AddComponent<SpriteRenderer>();
@@ -235,9 +229,6 @@ public class MountainBuilder
         }
         else
         {
-            // ── Multi-cases : découpe en h tranches de 1 case ───────────────
-            // Chaque tranche est positionnée EXACTEMENT sur son centre de case.
-            // Cela respecte l'espacement vide (_cellSpacing) entre les cases.
             int pixH = Mathf.Max(1, Mathf.RoundToInt(sprite.pixelsPerUnit));
 
             for (int dy = 0; dy < h; dy++)
@@ -279,19 +270,14 @@ public class MountainBuilder
 
     /// <summary>
     /// Marque les cases intérieures du plateau montagneux comme réservées.
-    /// Scanne de baseY à sommetY. Pour chaque Y, trouve le X gauche et droit
-    /// les plus extrêmes puis réserve tout l'intérieur.
-    /// Gère correctement les extensions qui élargissent temporairement.
     /// </summary>
     public void ReservePlateau(System.Collections.Generic.List<MountainWFCGenerator.Placement> placements)
     {
         if (placements == null || placements.Count == 0) return;
 
-        // Copier la liste pour éviter les modifications pendant l'itération
         var placementsCopy = new System.Collections.Generic.List<MountainWFCGenerator.Placement>(placements);
         _lastPlacements = placementsCopy;
 
-        // Trouver le leftX et rightX pour chaque Y
         var leftAtY = new System.Collections.Generic.Dictionary<int, int>();
         var rightAtY = new System.Collections.Generic.Dictionary<int, int>();
         int minY = int.MaxValue, maxY = int.MinValue;
@@ -314,8 +300,6 @@ public class MountainBuilder
             }
         }
 
-        // Combler les Y manquants en interpolant entre les Y connus
-        // Cela gère les cas où l'extension laisse des trous
         int lastLeft = -1, lastRight = -1;
         for (int cy = minY; cy <= maxY; cy++)
         {
@@ -330,7 +314,6 @@ public class MountainBuilder
                 rightAtY[cy] = lastRight;
         }
 
-        // Marquer les cases intérieures
         int plateauCount = 0;
         foreach (var kvp in leftAtY)
         {
@@ -348,7 +331,7 @@ public class MountainBuilder
                 if (!cell.IsMountainReserved)
                 {
                     cell.IsMountainReserved = true;
-                    cell.IsMountainPlateau = true; // intérieur = HighGrid fog
+                    cell.IsMountainPlateau = true;
                     cell.Content = CellContent.Empty;
                     plateauCount++;
                 }
@@ -357,7 +340,6 @@ public class MountainBuilder
 
         Debug.Log($"[MountainBuilder] Plateau réservé : {plateauCount} cases (Y {minY}-{maxY})");
 
-        // Stocker les limites pour HighGrid
         _plateauLeftAtY = leftAtY;
         _plateauRightAtY = rightAtY;
         _plateauMinY = minY;
@@ -370,7 +352,6 @@ public class MountainBuilder
 
     /// <summary>
     /// Vide les visuels MainGrid sur TOUTES les cases IsMountainReserved.
-    /// Scan complet de la grille — aucun trou possible.
     /// </summary>
     public void ClearMainGridPlateau()
     {
@@ -383,14 +364,11 @@ public class MountainBuilder
                 var cell = _gm.GetCell(x, y);
                 if (cell == null || !cell.IsMountainReserved) continue;
 
-                // Vider le contenu (pas d'ennemis, items, etc.)
                 cell.Content = CellContent.Empty;
                 cleared++;
 
                 if (cell.IsMountainPlateau)
                 {
-                    // Plateau intérieur : désactiver CellView (HighGrid prend le relais)
-                    // PAS de ForceReveal → MainGrid fog reste 100% sur ces cases
                     var view = _gm.GetCellView(x, y);
                     if (view != null && view is MonoBehaviour mb && mb.gameObject != null)
                     {
@@ -398,7 +376,6 @@ public class MountainBuilder
                         viewsHidden++;
                     }
                 }
-                // Silhouette : PAS de ForceReveal → FogOfWar couvre normalement
             }
 
         Debug.Log($"[MountainBuilder] MainGrid plateau vidé : {cleared} cases, {viewsHidden} views cachées");
