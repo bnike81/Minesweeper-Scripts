@@ -5,14 +5,8 @@ using System.Collections.Generic;
 /// GroundVariantSystem — Sol procédural pour tous les biomes.
 ///
 /// FORÊT  (4 sprites) : prairie / haute herbe / fougère / prairie fleurie
-///   Distribués selon la distance aux arbres cachés + Perlin.
-///
-/// GROTTE (7 sprites) :
-///   Haute herbe   → 3 caillouteux  (rock1 / rock2 / rock3)
-///   Fougère       → 1 grosse pierre (bigRock)
-///   Prairie basse → 2 sol tassé    (earth1 / earth2)
-///   Prairie fleurie → 1 champignon  (mushroom)
-///   Distribution : distance aux bords de la grotte + Perlin.
+/// GROTTE (7 sprites) : caillouteux / grosse pierre / sol tassé / champignon
+/// PLAGE  (6 sprites) : sable tassé / sable haut / sable graminé ×2 / fougère plage / coquillages ×3
 /// </summary>
 public class GroundVariantSystem : MonoBehaviour
 {
@@ -29,64 +23,71 @@ public class GroundVariantSystem : MonoBehaviour
     // ── GROTTE ────────────────────────────────────────────────────────────────
 
     [Header("=== Grotte — Haute herbe (3 caillouteux) ===")]
-    [Tooltip("Sol caillouteux 1 — cailloux dispersés")]
     [SerializeField] private Sprite _caveRock1;
-    [Tooltip("Sol caillouteux 2 — formation rocheuse")]
     [SerializeField] private Sprite _caveRock2;
-    [Tooltip("Sol caillouteux 3 — accumulation de petits rochers")]
     [SerializeField] private Sprite _caveRock3;
 
     [Header("=== Grotte — Fougère (grosse pierre) ===")]
-    [Tooltip("Sol avec grosse pierre — équivalent fougère, proche des parois")]
     [SerializeField] private Sprite _caveBigRock;
 
     [Header("=== Grotte — Prairie basse (2 terres tassées) ===")]
-    [Tooltip("Sol tassé 1 — terre compactée principale")]
     [SerializeField] private Sprite _caveEarth1;
-    [Tooltip("Sol tassé 2 — terre compactée variante")]
     [SerializeField] private Sprite _caveEarth2;
 
     [Header("=== Grotte — Prairie fleurie (champignons) ===")]
-    [Tooltip("Sol champignon — équivalent prairie fleurie, zones ouvertes")]
     [SerializeField] private Sprite _caveMushroom;
 
-    // ── PARAMÈTRES COMMUNS ────────────────────────────────────────────────────
+    // ── PLAGE ─────────────────────────────────────────────────────────────────
 
-    [Header("=== Procédural (commun) ===")]
-    [SerializeField, Range(0.05f, 0.5f)] private float _perlinScale = 0.15f;
-    [SerializeField] private int _seed = 0;
+    [Header("=== Sol Plage ===")]
+    [Tooltip("Sable tassé — centre des zones révélées (rayon restreint)")]
+    [SerializeField] private Sprite _beachPackedSand;
+
+    [Tooltip("Sable haut — plus proche des palmiers (rayon agrandi vs forêt)")]
+    [SerializeField] private Sprite _beachTallSand;
+
+    [Tooltip("Sable graminé 1 — bords zones révélées, alternés avec graminé 2")]
+    [SerializeField] private Sprite _beachGrass1;
+
+    [Tooltip("Sable graminé 2 — bords zones révélées, alternés avec graminé 1")]
+    [SerializeField] private Sprite _beachGrass2;
+
+    [Tooltip("Fougère plage — bio-indicateur près des palmiers")]
+    [SerializeField] private Sprite _beachFern;
+
+    [Header("=== Plage — Coquillages (1-2 par chunk) ===")]
+    [SerializeField] private Sprite _beachShell1;
+    [SerializeField] private Sprite _beachShell2;
+    [SerializeField] private Sprite _beachShell3;
 
     // ── PARAMÈTRES FORÊT ──────────────────────────────────────────────────────
 
-    [Header("=== Forêt — Bord arbre (dist 1) ===")]
-    [SerializeField, Range(0f, 1f)] private float _borderTallGrass = 0.60f;
-    [SerializeField, Range(0f, 1f)] private float _borderFernInGrass = 0.25f;
-
-    [Header("=== Forêt — Semi-ouvert (dist 2-3) ===")]
-    [SerializeField, Range(0f, 1f)] private float _semiTallGrass = 0.45f;
-    [SerializeField, Range(0f, 1f)] private float _semiFernInGrass = 0.15f;
-    [SerializeField, Range(0f, 1f)] private float _semiFlower = 0.10f;
-
-    [Header("=== Forêt — Ouvert (dist 4+) ===")]
-    [SerializeField, Range(0f, 1f)] private float _openFlower = 0.20f;
-    [SerializeField, Range(0f, 1f)] private float _openTallGrass = 0.10f;
-    [SerializeField, Range(0.3f, 0.7f)] private float _pathThreshold = 0.45f;
+    [Header("=== Paramètres Forêt ===")]
+    [SerializeField] private int _seed = 0;
+    [SerializeField, Range(0.05f, 0.3f)] private float _perlinScale = 0.15f;
+    [SerializeField, Range(0f, 1f)] private float _borderTallGrass = 0.55f;
+    [SerializeField, Range(0f, 1f)] private float _borderFernInGrass = 0.20f;
+    [SerializeField, Range(0f, 1f)] private float _semiTallGrass = 0.35f;
+    [SerializeField, Range(0f, 1f)] private float _semiFernInGrass = 0.10f;
+    [SerializeField, Range(0f, 1f)] private float _semiFlower = 0.05f;
+    [SerializeField, Range(0f, 1f)] private float _openFlower = 0.04f;
+    [SerializeField, Range(0f, 1f)] private float _openTallGrass = 0.08f;
+    [SerializeField, Range(0.3f, 0.7f)] private float _pathThreshold = 0.55f;
 
     // ── PARAMÈTRES GROTTE ─────────────────────────────────────────────────────
 
-    [Header("=== Grotte — Bande rocheuse (cases depuis le bord) ===")]
-    [SerializeField, Range(1, 6)] private int _caveRockyBorderDist = 2;
+    [Header("=== Paramètres Grotte ===")]
+    [SerializeField, Range(1, 5)] private int _caveRockyBorderDist = 2;
 
-    [Header("=== Grotte — Poids zone rocheuse (proche parois) ===")]
-    [SerializeField, Range(0f, 1f)] private float _bRock1 = 0.30f;
-    [SerializeField, Range(0f, 1f)] private float _bRock2 = 0.22f;
-    [SerializeField, Range(0f, 1f)] private float _bRock3 = 0.18f;
+    [Header("=== Grotte — Poids zone rocheuse ===")]
+    [SerializeField, Range(0f, 1f)] private float _bRock1 = 0.22f;
+    [SerializeField, Range(0f, 1f)] private float _bRock2 = 0.18f;
+    [SerializeField, Range(0f, 1f)] private float _bRock3 = 0.15f;
     [SerializeField, Range(0f, 1f)] private float _bBigRock = 0.14f;
     [SerializeField, Range(0f, 1f)] private float _bEarth1 = 0.09f;
     [SerializeField, Range(0f, 1f)] private float _bEarth2 = 0.07f;
-    // Reste (0.00 après arrondi) → mushroom (ne pousse pas trop près des murs)
 
-    [Header("=== Grotte — Poids zone centrale (loin des parois) ===")]
+    [Header("=== Grotte — Poids zone centrale ===")]
     [SerializeField, Range(0f, 1f)] private float _oEarth1 = 0.38f;
     [SerializeField, Range(0f, 1f)] private float _oEarth2 = 0.28f;
     [SerializeField, Range(0f, 1f)] private float _oMushroom = 0.12f;
@@ -94,7 +95,24 @@ public class GroundVariantSystem : MonoBehaviour
     [SerializeField, Range(0f, 1f)] private float _oRock2 = 0.07f;
     [SerializeField, Range(0f, 1f)] private float _oRock3 = 0.04f;
     [SerializeField, Range(0f, 1f)] private float _oBigRock = 0.03f;
-    // earth1 + earth2 + mushroom + rock1..3 + bigRock doit ≤ 1.0
+
+    // ── PARAMÈTRES PLAGE ──────────────────────────────────────────────────────
+
+    [Header("=== Paramètres Plage ===")]
+    [Tooltip("Dist max pour sable graminé + fougère (plus grand que forêt)")]
+    [SerializeField, Range(1, 4)] private int _beachGrassBorderDist = 2;
+    [Tooltip("Dist max pour sable haut (agrandi vs forêt haute herbes)")]
+    [SerializeField, Range(2, 6)] private int _beachTallSandDist = 4;
+    [Tooltip("Dist min pour sable tassé centre (plus restreint que prairie)")]
+    [SerializeField, Range(3, 8)] private int _beachPackedMinDist = 5;
+    [Tooltip("Probabilité coquillage par case (1-2 par chunk ≈ 0.005-0.01)")]
+    [SerializeField, Range(0f, 0.03f)] private float _beachShellChance = 0.008f;
+    [Tooltip("Proba fougère plage près des palmiers")]
+    [SerializeField, Range(0f, 0.5f)] private float _beachFernChance = 0.15f;
+    [Tooltip("Proba sable graminé dans zone bord")]
+    [SerializeField, Range(0f, 1f)] private float _beachGrassChance = 0.50f;
+    [Tooltip("Proba sable haut dans zone intermédiaire")]
+    [SerializeField, Range(0f, 1f)] private float _beachTallSandChance = 0.40f;
 
     // ── ÉTAT INTERNE ──────────────────────────────────────────────────────────
 
@@ -102,6 +120,7 @@ public class GroundVariantSystem : MonoBehaviour
     private Vector2 _perlinOffset;
     private readonly Dictionary<(int, int), Sprite> _forestCache = new();
     private readonly Dictionary<(int, int), Sprite> _caveCache = new();
+    private readonly Dictionary<(int, int), Sprite> _beachCache = new();
 
     private void Awake()
     {
@@ -119,6 +138,7 @@ public class GroundVariantSystem : MonoBehaviour
                                     (float)_rng.NextDouble() * 1000f);
         _forestCache.Clear();
         _caveCache.Clear();
+        _beachCache.Clear();
         Debug.Log("<color=#88FF44>[GroundVariant]</color> seed=" + seed);
     }
 
@@ -139,11 +159,6 @@ public class GroundVariantSystem : MonoBehaviour
 
     // ── API GROTTE ────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Sprite de sol pour une case de grotte.
-    /// caveWidth / caveHeight : dimensions totales de la grotte en cases
-    /// (nécessaires pour calculer la distance aux bords).
-    /// </summary>
     public Sprite GetCaveGroundSprite(int x, int y, int caveWidth, int caveHeight)
     {
         if (_caveCache.TryGetValue((x, y), out var c)) return c;
@@ -152,6 +167,25 @@ public class GroundVariantSystem : MonoBehaviour
         float roll = Roll();
         var result = ChooseCave(distEdge, perlin, roll);
         _caveCache[(x, y)] = result;
+        return result;
+    }
+
+    // ── API PLAGE ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Sprite de sol pour une case de plage.
+    /// Même pattern que forêt : distance aux palmiers cachés + Perlin.
+    /// </summary>
+    public Sprite GetBeachGroundSprite(int x, int y)
+    {
+        if (_beachCache.TryGetValue((x, y), out var c)) return c;
+        var gm = GridManager.Instance;
+        if (gm == null || gm.Grid == null) return _beachPackedSand;
+        int dist = DistToHiddenBeach(gm.Grid, x, y, gm.Width, gm.Height);
+        float perlin = Perlin(x, y);
+        float roll = Roll();
+        var result = ChooseBeach(dist, perlin, roll, x, y);
+        _beachCache[(x, y)] = result;
         return result;
     }
 
@@ -184,8 +218,6 @@ public class GroundVariantSystem : MonoBehaviour
     {
         if (distEdge <= _caveRockyBorderDist)
         {
-            // Zone rocheuse — proche des parois
-            // Grosse pierre apparaît surtout ici (comme la fougère près des arbres)
             float t = 0f;
             float r1 = t += _bRock1;
             float r2 = t += _bRock2;
@@ -200,12 +232,10 @@ public class GroundVariantSystem : MonoBehaviour
             if (roll < r4) return S(_caveBigRock, _caveRock1);
             if (roll < r5) return S(_caveEarth1);
             if (roll < r6) return S(_caveEarth2, _caveEarth1);
-            // Reste : champignon (rare près des bords, humidité des parois)
             return S(_caveMushroom, _caveEarth1);
         }
         else
         {
-            // Zone centrale — sol tassé dominant, champignons, cailloux rares
             float t = 0f;
             float e1 = t += _oEarth1;
             float e2 = t += _oEarth2;
@@ -226,6 +256,76 @@ public class GroundVariantSystem : MonoBehaviour
         }
     }
 
+    // ── CHOIX PLAGE ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Distribution plage :
+    ///   dist ≤ beachGrassBorderDist  → sable graminé 1/2 (alternés) + fougère plage
+    ///   dist ≤ beachTallSandDist     → sable haut (rayon agrandi)
+    ///   dist ≥ beachPackedMinDist    → sable tassé (centre restreint)
+    ///   partout                      → coquillages rares (1-2 par chunk)
+    /// </summary>
+    private Sprite ChooseBeach(int dist, float perlin, float roll, int x, int y)
+    {
+        // Coquillages — très rares, dispersés partout
+        if (roll < _beachShellChance)
+        {
+            int shellIdx = (x * 31 + y * 17) % 3; // pseudo-random par position
+            return shellIdx switch
+            {
+                0 => S(_beachShell1, _beachPackedSand),
+                1 => S(_beachShell2, _beachPackedSand),
+                _ => S(_beachShell3, _beachPackedSand)
+            };
+        }
+
+        // Zone bord — très proche des palmiers
+        if (dist <= _beachGrassBorderDist)
+        {
+            // Fougère plage — bio-indicateur comme en forêt
+            if (roll < _beachFernChance)
+                return S(_beachFern, _beachGrass1);
+
+            // Sable graminé 1 et 2 alternés (damier par position)
+            if (roll < _beachFernChance + _beachGrassChance)
+            {
+                bool alt = (x + y) % 2 == 0;
+                return alt ? S(_beachGrass1, _beachPackedSand)
+                           : S(_beachGrass2, _beachPackedSand);
+            }
+
+            // Reste : sable haut
+            return S(_beachTallSand, _beachPackedSand);
+        }
+
+        // Zone intermédiaire — sable haut (rayon agrandi vs forêt)
+        if (dist <= _beachTallSandDist)
+        {
+            if (roll < _beachTallSandChance)
+                return S(_beachTallSand, _beachPackedSand);
+
+            // Sable graminé rare en zone intermédiaire
+            if (roll < _beachTallSandChance + 0.10f)
+            {
+                bool alt = (x + y) % 2 == 0;
+                return alt ? S(_beachGrass1, _beachPackedSand)
+                           : S(_beachGrass2, _beachPackedSand);
+            }
+
+            return S(_beachPackedSand);
+        }
+
+        // Zone centre — sable tassé dominant (rayon restreint)
+        if (perlin > _pathThreshold)
+            return S(_beachPackedSand);
+
+        // Sable haut sporadique même au centre
+        if (roll < 0.06f)
+            return S(_beachTallSand, _beachPackedSand);
+
+        return S(_beachPackedSand);
+    }
+
     // ── HELPERS ───────────────────────────────────────────────────────────────
 
     private int DistToHiddenForest(Cell[,] grid, int x, int y, int w, int h)
@@ -243,6 +343,22 @@ public class GroundVariantSystem : MonoBehaviour
         return 99;
     }
 
+    /// <summary>Distance à la case plage cachée la plus proche (palmier).</summary>
+    private int DistToHiddenBeach(Cell[,] grid, int x, int y, int w, int h)
+    {
+        for (int d = 1; d <= 8; d++) // rayon plus grand que forêt
+            for (int dx = -d; dx <= d; dx++)
+                for (int dy = -d; dy <= d; dy++)
+                {
+                    if (Mathf.Abs(dx) != d && Mathf.Abs(dy) != d) continue;
+                    int nx = x + dx, ny = y + dy;
+                    if (!MinesweeperLogic.IsInBounds(nx, ny, w, h)) continue;
+                    if (!grid[nx, ny].IsRevealed && grid[nx, ny].Biome == BiomeType.Beach)
+                        return d;
+                }
+        return 99;
+    }
+
     private float Perlin(int x, int y) =>
         Mathf.PerlinNoise((_perlinOffset.x + x) * _perlinScale,
                           (_perlinOffset.y + y) * _perlinScale);
@@ -253,8 +369,13 @@ public class GroundVariantSystem : MonoBehaviour
     {
         if (a != null) return a;
         if (b != null) return b;
-        return _prairieSprite ?? _caveEarth1;
+        return _prairieSprite ?? _caveEarth1 ?? _beachPackedSand;
     }
 
-    public void ClearCache() { _forestCache.Clear(); _caveCache.Clear(); }
+    public void ClearCache()
+    {
+        _forestCache.Clear();
+        _caveCache.Clear();
+        _beachCache.Clear();
+    }
 }

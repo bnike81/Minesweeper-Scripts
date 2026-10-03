@@ -110,6 +110,11 @@ public class ShepherdFarmSpawner : MonoBehaviour
     [Tooltip("0 = aleatoire a chaque partie. Valeur fixe = meme ferme reproductible")]
     [SerializeField] private int _seed = 0;
 
+    [Header("--- Prologue ---")]
+    [Tooltip("Level où la ferme spawn. 1=grille initiale, 2=première extension")]
+    [SerializeField] private int _spawnAtLevel = 2;
+    private bool _farmReserved;
+    private bool _farmSpawned;
     // -------------------------------------------------------------------------
     // Etat interne
     // -------------------------------------------------------------------------
@@ -162,13 +167,13 @@ public class ShepherdFarmSpawner : MonoBehaviour
 
     private void OnRunStarted(OnRunStarted evt)
     {
-        // On reinitialise seulement la graine ici
-        // ClearSpawned se fait dans OnGridGenerated pour eviter
-        // que le clear arrive APRES le spawn (ordre des handlers)
         int seed = _seed != 0 ? _seed : UnityEngine.Random.Range(1, 99999);
         _rng = new System.Random(seed);
         _farmCells = new List<Vector2Int>();
+        _farmReserved = false;
+        _farmSpawned = false;
     }
+
 
     /// <summary>
     /// Recu AVANT SpawnCellViews - on calcule la position de la ferme
@@ -179,60 +184,83 @@ public class ShepherdFarmSpawner : MonoBehaviour
         _cellStep = GridManager.Instance != null
             ? GridManager.Instance.CellStep : 1.05f;
 
-        // Calculer la position de la ferme
+        if (_spawnAtLevel > 1) return; // Prologue : ferme retardée
+
         Vector2Int? origin = FindFarmZone(evt.Width, evt.Height);
         if (!origin.HasValue)
         {
-            Debug.LogWarning("[ShepherdFarm] Impossible de trouver une zone de ferme !");
+            Debug.LogWarning("[ShepherdFarm] Zone introuvable !");
             _farmOrigin = new Vector2Int(evt.Width / 2 - 2, evt.Height / 2 - 2);
         }
-        else
-        {
-            _farmOrigin = origin.Value;
-        }
+        else _farmOrigin = origin.Value;
 
-        // Centre de la ferme
         int cx = _farmOrigin.x + _minFarmZoneSize / 2;
         int cy = _farmOrigin.y + _minFarmZoneSize / 2;
-
-        // Cercle de protection - exclut les dangers, garde la foret visuellement
         GridManager.Instance?.ReserveCircle(cx, cy, _farmProtectionRadius);
-
     }
 
     private void OnGridGenerated(OnGridGenerated evt)
     {
-        // Clear en premier : detruit les objets de la run precedente
         ClearSpawned();
         _farmCells = new List<Vector2Int>();
         _allSheepPositions = new List<Vector2Int>();
-
         _cellStep = GridManager.Instance != null
             ? GridManager.Instance.CellStep : 1.05f;
 
-        // _farmOrigin est deja calcule dans OnGridDataReady
+        if (_spawnAtLevel > 1) return; // Prologue : pas de ferme ici
+
         SpawnFarmAtOrigin(evt.Width, evt.Height);
     }
 
     private void OnGridExtending(OnGridExtending evt)
     {
-        // Spawner les moutons niv2 dans la NOUVELLE zone avant qu elle soit generee
-        // OnGridExtending donne OldHeight et NewHeight - on place dans cette zone
-        if (evt.Level != 2) return; // Seulement au niveau 2
-
-
         _cellStep = GridManager.Instance?.CellStep ?? _cellStep;
-        SpawnSheepInZone(
-            QuestManager.Instance?.SheepOnLevel2 ?? 2,
-            evt.Width,
-            evt.NewHeight,
-            evt.OldHeight,          // yMin = debut de la nouvelle zone
-            QuestManager.Instance?.SheepOnLevel1 ?? 2);
+
+        // Réserver la zone ferme au bon level (AVANT PlaceDangers)
+        if (_spawnAtLevel > 1 && evt.Level == _spawnAtLevel && !_farmReserved)
+        {
+            var gm = GridManager.Instance;
+            if (gm != null)
+            {
+                Vector2Int? origin = FindFarmZone(gm.Width, gm.Height);
+                _farmOrigin = origin ?? new Vector2Int(gm.Width / 2 - 2, evt.OldHeight + 2);
+
+                int cx = _farmOrigin.x + _minFarmZoneSize / 2;
+                int cy = _farmOrigin.y + _minFarmZoneSize / 2;
+                gm.ReserveCircle(cx, cy, _farmProtectionRadius);
+                _farmReserved = true;
+            }
+        }
+
+        // Moutons batch 1 : même level que la ferme (2 moutons)
+        // Avant : level 1 (grille initiale avec la ferme)
+        // Après : level 2 (première extension avec la ferme)
+        // Rien à faire ici — les moutons batch 1 sont placés dans SpawnFarmAtOrigin
+
+        // Moutons batch 2 : level SUIVANT la ferme (2 moutons)
+        // Avant : level 2, Après : level 3
+        if (evt.Level == _spawnAtLevel + 1)
+        {
+            SpawnSheepInZone(
+                QuestManager.Instance?.SheepOnLevel2 ?? 2,
+                evt.Width,
+                evt.NewHeight,
+                evt.OldHeight,
+                QuestManager.Instance?.SheepOnLevel1 ?? 2);
+        }
     }
 
     private void OnGridExtended(OnGridExtended evt)
     {
-        // Ne plus spawner ici - gere dans OnGridExtending
+        if (_spawnAtLevel > 1 && evt.Level == _spawnAtLevel && !_farmSpawned)
+        {
+            var gm = GridManager.Instance;
+            if (gm != null)
+            {
+                SpawnFarmAtOrigin(gm.Width, gm.Height);
+                _farmSpawned = true;
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -267,7 +295,7 @@ public class ShepherdFarmSpawner : MonoBehaviour
 
         // 5. Placer 1-2 moutons proches de la ferme (niveau 1)
         int sheepOnL1 = QuestManager.Instance != null
-            ? QuestManager.Instance.SheepOnLevel1 : 2;
+            ? QuestManager.Instance.SheepOnLevel2 : 2;
         SpawnSheepNearFarm(sheepOnL1, gridWidth, gridHeight, 0);
 
     }
