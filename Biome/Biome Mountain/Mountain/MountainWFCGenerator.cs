@@ -54,8 +54,8 @@ public class MountainWFCGenerator
         bool extLeft = _recipe.hasExtension && _recipe.extensionOnLeft;
         bool extRight = _recipe.hasExtension && !_recipe.extensionOnLeft;
         var topL = BuildColumnWithExt(_topOfAngleL, PieceType.BorderSimpleL, true, extLeft);
+        _baseLeftX = topL.currentX;  // Mettre à jour AVANT la colonne droite
         var topR = BuildColumnWithExt(_topOfAngleR, PieceType.BorderSimpleR, false, extRight);
-        _baseLeftX = topL.currentX;
         _baseRightX = topR.currentX;
 
 
@@ -269,6 +269,19 @@ public class MountainWFCGenerator
                 _baseThickness = (_recipe.thicknessMin + _recipe.thicknessMax) / 2;
                 continue;
             }
+             // ── Épaisseur trop faible → arrêter la colonne et fermer le top ──
+            int currentThickness;
+            if (isLeft)
+                currentThickness = _baseRightX - cur.X;
+            else
+                currentThickness = cur.X - _baseLeftX;
+ 
+            if (currentThickness <= 3 && remaining <= 6)
+            {
+                Debug.Log($"[MtnWFC] Colonne {(isLeft ? "G" : "D")} stoppée : " +
+                          $"épaisseur={currentThickness} X={cur.X} remaining={remaining}");
+                break; // Sortir de la boucle → BuildTop fermera le top
+            }
 
             PieceType next = ChooseMidPiece(
                 last, isLeft, tier, remaining,
@@ -403,9 +416,23 @@ public class MountainWFCGenerator
 
         var opts = new System.Collections.Generic.List<(PieceType t, int w)>();
 
-        // ── Bloquer expand si déjà au bord de la grille ─────────────────────
+        // ── Bloquer expand ET retract si déjà au bord de la grille ──────────
+        // AngleL, AngleR, AngleTopG, AngleTopD changent tous le X.
+        // Au bord distance 0, seuls les bords (Simple, Double) et virages sont permis.
         bool atGridEdge = (isLeft && _currentColumnX <= 0) ||
                           (!isLeft && _currentColumnX >= _gridWidth - 1);
+
+        // Si au bord : forcer uniquement des pièces qui ne changent PAS le X
+        if (atGridEdge)
+        {
+            opts.Add((bS, 5));
+            if (remaining >= 2) opts.Add((bD, 3));
+            // Virages autorisés (ne changent pas X, seulement visuel)
+            if (consecBordHeight >= 2 && remaining >= 4) opts.Add((tS, 2));
+            if (consecBordHeight >= 3 && remaining >= 5) opts.Add((tL, 1));
+            if (consecBordHeight >= 4 && remaining >= 6) opts.Add((tXL, 1));
+            return Pick(opts);
+        }
 
         // ── Calcul orientation X (en premier pour être disponible partout) ────
         bool needExpand = false;
@@ -870,152 +897,152 @@ public class MountainWFCGenerator
 
         // AngleTopD sera placé APRÈS la boucle TopEdge (pour tenir compte des cassures)
         int rightEndX = rightCur.X;
-        int topY = atgAnchor.Y;
 
         // ── TopEdge entre les deux coins avec cassures ────────────────────────
         int startX = atgAnchor.X + 1;
-        int endX = rightEndX;
+        int endX = rightCur.X;
         int totalWidth = endX - startX;
+        int topY = atgAnchor.Y;
 
         if (totalWidth <= 0)
         {
+            // Montagne trop étroite — juste AngleTopD collé à AngleTopG
+            Add(PieceType.AngleTopD, new MountainAnchor(endX, topY));
             SommetY = topY + 2;
             return;
         }
 
-        // Choisir la configuration de cassure
-        bool allowCassure = _recipe.allowTopBreak && totalWidth >= 6;
-        int config = 0; // 0 = pas de cassure
-        if (allowCassure && _rng.NextDouble() < _recipe.topBreakChance)
-        {
-            config = _rng.Next(1, 4); // 1=monte, 2=monte+descend, 3=descend
-        }
-
         int curX = startX;
         int curY = topY;
-        int safety = 0;
 
-        switch (config)
+        // ── MONTAGNE ÉTROITE (totalWidth <= 3) → TOP PLAT, pas de cassure ────
+        // Forcer AngleTopG + TopEdge × N + AngleTopD tous au même Y
+        if (totalWidth <= 3)
         {
-            case 0: // Pas de cassure — TopEdge tout droit
-                while (curX < endX && safety++ < 50)
-                {
-                    if (curX >= endX) break; // pas dépasser le coin droit
-                    Add(PieceType.TopEdge, new MountainAnchor(curX, curY));
-                    curX++;
-                }
-                break;
+            while (curX < endX)
+            {
+                Add(PieceType.TopEdge, new MountainAnchor(curX, curY));
+                curX++;
+            }
+        }
+        else
+        {
+            // ── MONTAGNE LARGE → cassures possibles ──────────────────────────
+            bool allowCassure = _recipe.allowTopBreak && totalWidth >= 6;
+            int config = 0;
+            if (allowCassure && _rng.NextDouble() < _recipe.topBreakChance)
+                config = _rng.Next(1, 4);
 
-            case 1: // Monte (centrée gauche)
-                {
-                    int cassureX = startX + Mathf.Max(2, 3 + _rng.Next(Mathf.Max(1, totalWidth / 2 - 3)));
-                    // Laisser au moins 2 TopEdge après la cassure
-                    cassureX = Mathf.Min(cassureX, endX - 3);
+            int safety = 0;
+
+            switch (config)
+            {
+                case 0: // Pas de cassure — TopEdge tout droit
                     while (curX < endX && safety++ < 50)
                     {
-                        if (curX == cassureX)
-                        {
-                            Add(PieceType.AngleTopG, new MountainAnchor(curX, curY));
-                            curY += 1;
-                            curX++;
-                            continue;
-                        }
                         Add(PieceType.TopEdge, new MountainAnchor(curX, curY));
                         curX++;
                     }
                     break;
-                }
 
-            case 2: // Monte puis descend (centrée)
-                {
-                    int third = Mathf.Max(2, totalWidth / 3);
-                    int cassure1X = startX + third;
-                    int cassure2X = startX + third * 2;
-                    while (curX < endX && safety++ < 50)
+                case 1: // Monte (centrée gauche)
                     {
-                        if (curX == cassure1X)
+                        int cassureX = startX + Mathf.Max(2,
+                            3 + _rng.Next(Mathf.Max(1, totalWidth / 2 - 3)));
+                        cassureX = Mathf.Min(cassureX, endX - 3);
+                        while (curX < endX && safety++ < 50)
                         {
-                            // Monte : AngleTopG à x, y+1
-                            Add(PieceType.AngleTopG, new MountainAnchor(curX, curY + 1));
-                            curY += 1;
+                            if (curX == cassureX)
+                            {
+                                curY += 1;
+                                Add(PieceType.AngleTopG,
+                                    new MountainAnchor(curX, curY));
+                                curX++;
+                                continue;
+                            }
+                            Add(PieceType.TopEdge, new MountainAnchor(curX, curY));
                             curX++;
-                            continue;
                         }
-                        if (curX == cassure2X)
-                        {
-                            // Descend : AngleTopD à x, y0 (même Y), prochain TopEdge y-1
-                            Add(PieceType.AngleTopD, new MountainAnchor(curX, curY));
-                            curX++;
-                            curY -= 1;
-                            continue;
-                        }
-                        Add(PieceType.TopEdge, new MountainAnchor(curX, curY));
-                        curX++;
+                        break;
                     }
-                    break;
-                }
 
-            case 3: // Descend (centrée droite)
-                {
-                    int cassureX = startX + Mathf.Max(2, totalWidth / 2);
-                    cassureX = Mathf.Min(cassureX, endX - 3);
-                    while (curX < endX && safety++ < 50)
+                case 2: // Monte puis descend (centrée)
                     {
-                        if (curX == cassureX)
+                        int third = Mathf.Max(2, totalWidth / 3);
+                        int cassure1X = startX + third;
+                        int cassure2X = startX + third * 2;
+                        // Garantir au moins 2 TopEdge entre cassures
+                        if (cassure2X - cassure1X < 3)
+                            cassure2X = cassure1X + 3;
+                        cassure2X = Mathf.Min(cassure2X, endX - 2);
+                        while (curX < endX && safety++ < 50)
                         {
-                            // Descend : AngleTopD à x, y0, prochain TopEdge y-1
-                            Add(PieceType.AngleTopD, new MountainAnchor(curX, curY));
+                            if (curX == cassure1X)
+                            {
+                                curY += 1;
+                                Add(PieceType.AngleTopG,
+                                    new MountainAnchor(curX, curY));
+                                curX++;
+                                continue;
+                            }
+                            if (curX == cassure2X)
+                            {
+                                Add(PieceType.AngleTopD,
+                                    new MountainAnchor(curX, curY));
+                                curX++;
+                                curY -= 1;
+                                continue;
+                            }
+                            Add(PieceType.TopEdge, new MountainAnchor(curX, curY));
                             curX++;
-                            curY -= 1;
-                            continue;
                         }
-                        Add(PieceType.TopEdge, new MountainAnchor(curX, curY));
-                        curX++;
+                        break;
                     }
-                    break;
-                }
+
+                case 3: // Descend (centrée droite)
+                    {
+                        int cassureX = startX + Mathf.Max(2, totalWidth / 2);
+                        cassureX = Mathf.Min(cassureX, endX - 3);
+                        while (curX < endX && safety++ < 50)
+                        {
+                            if (curX == cassureX)
+                            {
+                                Add(PieceType.AngleTopD,
+                                    new MountainAnchor(curX, curY));
+                                curX++;
+                                curY -= 1;
+                                continue;
+                            }
+                            Add(PieceType.TopEdge, new MountainAnchor(curX, curY));
+                            curX++;
+                        }
+                        break;
+                    }
+            }
         }
 
-        // ── Coin droit — AngleTopD au Y de la rangée TopEdge ──────────────
-        // Le coin droit s'aligne sur curY (Y final des TopEdge après cassures)
+        // ── Coin droit — AngleTopD aligné sur le dernier TopEdge ──────────
+        // Compléter les TopEdge restants jusqu'à la colonne droite
+        while (curX < endX)
+        {
+            Add(PieceType.TopEdge, new MountainAnchor(curX, curY));
+            curX++;
+        }
+
+        // AngleTopD à (endX, curY) — MÊME Y que le dernier TopEdge
+        Add(PieceType.AngleTopD, new MountainAnchor(endX, curY));
+
+        Debug.Log($"[MtnWFC] Top: width={totalWidth} curY={curY} " +
+                  $"AngleTopD=({endX},{curY})");
+
+        // Combler la colonne droite EN DESSOUS de AngleTopD
         int topOfRightCol = rightCur.Y + MountainPieceData.GetHeight(rightTypeCur);
-
-        // Si la colonne droite n'atteint pas curY, combler avec des bords
-        while (topOfRightCol < curY)
+        for (int fillY = topOfRightCol; fillY < curY; fillY++)
         {
-            PieceType bR = PieceType.BorderSimpleR;
-            MountainAnchor brA = MountainPieceData.GetAnchorOut(
-                rightTypeCur, rightCur, bR);
-            Add(bR, brA);
-            rightCur = brA;
-            rightTypeCur = bR;
-            topOfRightCol = rightCur.Y + MountainPieceData.GetHeight(rightTypeCur);
+            Add(PieceType.BorderSimpleR, new MountainAnchor(endX, fillY));
         }
 
-        // Forcer BorderSimple avant AngleTopD si dernier = AngleTop
-        if (rightTypeCur == PieceType.AngleTopG || rightTypeCur == PieceType.AngleTopD)
-        {
-            MountainAnchor bRA = MountainPieceData.GetAnchorOut(
-                rightTypeCur, rightCur, PieceType.BorderSimpleR);
-            Add(PieceType.BorderSimpleR, bRA);
-            rightCur = bRA;
-            rightTypeCur = PieceType.BorderSimpleR;
-        }
-
-        // AngleTopD au Y de la rangée TopEdge
-        MountainAnchor atdAnchor = MountainPieceData.GetAnchorOut(
-            rightTypeCur, rightCur, PieceType.AngleTopD);
-        Add(PieceType.AngleTopD, atdAnchor);
-
-        // Combler entre les TopEdge (curX) et AngleTopD avec des TopEdge
-        int gapStartX = curX;
-        while (gapStartX < atdAnchor.X)
-        {
-            Add(PieceType.TopEdge, new MountainAnchor(gapStartX, curY));
-            gapStartX++;
-        }
-
-        SommetY = Mathf.Max(topY, Mathf.Max(curY, atdAnchor.Y)) + 2;
+        SommetY = Mathf.Max(topY, curY) + 2;
     }
 
     /// <summary>
