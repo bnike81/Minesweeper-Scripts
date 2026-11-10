@@ -12,6 +12,7 @@ public class ForestCellView : CellViewBase, ITreeLayer
 
     [Header("=== Arbres ===")]
     [SerializeField] private SpriteRenderer _treeLayerRenderer;
+    public SpriteRenderer TreeLayerRenderer => _treeLayerRenderer;
     [SerializeField] private Sprite _treeTrunkSprite;
     [SerializeField] private Sprite _treeCanopySprite;
     [SerializeField] private Sprite _treeCimeSprite;
@@ -65,7 +66,7 @@ public class ForestCellView : CellViewBase, ITreeLayer
     protected override void ShowHidden()
     {
         // Plateau montagne → rien
-        if (_cell != null && _cell.IsMountainReserved)
+        if (_cell != null && (_cell.IsMountainReserved || _cell.IsCoastWater))
         {
             SetBg(null);
             HideTreeLayer();
@@ -78,7 +79,7 @@ public class ForestCellView : CellViewBase, ITreeLayer
         HideNumber();
         RefreshTreeLayer();
     }
-    
+
 
     protected override void ShowFlagged()
     {
@@ -91,7 +92,7 @@ public class ForestCellView : CellViewBase, ITreeLayer
     protected override void ShowRevealed()
 
     {
-        if (_cell != null && _cell.IsMountainReserved)
+        if (_cell != null && (_cell.IsMountainReserved || _cell.IsCoastWater))
         {
             SetBg(null);
             HideTreeLayer();
@@ -108,8 +109,8 @@ public class ForestCellView : CellViewBase, ITreeLayer
             ? gvs.GetGroundSprite(_cell.X, _cell.Y) ?? _groundRevealedSprite
             : _groundRevealedSprite;
         SetBg(ground);
-      
-        
+
+
         switch (_cell.Content)
         {
             case CellContent.Empty:

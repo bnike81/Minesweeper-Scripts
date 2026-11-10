@@ -35,6 +35,10 @@ public class MountainWFCGenerator
     private MountainAnchor _topOfAngleL;
     private MountainAnchor _topOfAngleR;
     private int _baseLeftX, _baseRightX; // positions X des bords
+    private bool _refFromRight;  // valeur effective (miroir appliqué)
+    private bool _extOnLeft;     // valeur effective (miroir appliqué)
+    private int _leftExtOffset;  // décalage X causé par l'extension gauche
+    private int _rightExtOffset; // décalage X causé par l'extension droite
 
     // =========================================================================
     // GÉNÉRATION
@@ -47,16 +51,29 @@ public class MountainWFCGenerator
         _rng = new System.Random();
         _gridWidth = gridWidth;
 
+        // ── MIROIR : 50% d'inverser référence ET extension ensemble ──────────
+        bool mirrored = _recipe.allowMirror && _rng.NextDouble() < 0.5;
+        _refFromRight = mirrored ? !_recipe.referenceFromRight : _recipe.referenceFromRight;
+        _extOnLeft = mirrored ? !_recipe.extensionOnLeft : _recipe.extensionOnLeft;
+        if (mirrored)
+            Debug.Log("[MtnWFC] MIROIR actif : ref=" + (_refFromRight ? "droite" : "gauche")
+                      + " ext=" + (_extOnLeft ? "gauche" : "droite"));
+
+        _leftExtOffset = 0;
+        _rightExtOffset = 0;
+
         // ── PHASE 1 : BASE (horizontal) ──────────────────────────────────────
         BuildBase(baseX, baseY);
 
         // ── PHASE 2 : MID (deux colonnes verticales) ─────────────────────────
-        bool extLeft = _recipe.hasExtension && _recipe.extensionOnLeft;
-        bool extRight = _recipe.hasExtension && !_recipe.extensionOnLeft;
+        bool extLeft = _recipe.hasExtension && _extOnLeft;
+        bool extRight = _recipe.hasExtension && !_extOnLeft;
+        // NOTE : _baseLeftX et _baseRightX gardent leurs valeurs BASE pendant
+        // toute la construction mid. Mettre à jour _baseLeftX au X final de la
+        // gauche AVANT la droite causait un anti-crossover trop serré (la droite
+        // voyait l'épaisseur du TOP, pas celle à sa hauteur actuelle).
         var topL = BuildColumnWithExt(_topOfAngleL, PieceType.BorderSimpleL, true, extLeft);
-        _baseLeftX = topL.currentX;  // Mettre à jour AVANT la colonne droite
         var topR = BuildColumnWithExt(_topOfAngleR, PieceType.BorderSimpleR, false, extRight);
-        _baseRightX = topR.currentX;
 
 
         // ── PHASE 3 : TOP (fermeture horizontale) ────────────────────────────
@@ -67,7 +84,7 @@ public class MountainWFCGenerator
         FillGapsAfterVirages();
 
         Debug.Log($"[MtnWFC] Montagne : {Placements.Count} pièces, " +
-                  $"base=({_baseLeftX},{baseY}), sommet Y={SommetY}");
+                  $"base=({_baseLeftX},{baseY}), topL={topL.anchor.X} topR={topR.anchor.X}, sommet Y={SommetY}");
     }
 
     // =========================================================================
@@ -88,7 +105,7 @@ public class MountainWFCGenerator
 
         // Position de la base selon le côté de référence
         int lx;
-        if (_recipe.referenceFromRight)
+        if (_refFromRight)
         {
             // Référence droite : le bord DROIT est à xAtBase du bord droit
             // → le bord gauche = (gridWidth - xAtBase) - largeur totale
@@ -205,8 +222,8 @@ public class MountainWFCGenerator
             int remaining = midHeight - built;
 
             // Calculer le X cible — seulement pour le côté RÉFÉRENCE
-            bool isReferenceSide = (isLeft && !_recipe.referenceFromRight)
-                                || (!isLeft && _recipe.referenceFromRight);
+            bool isReferenceSide = (isLeft && !_refFromRight)
+                                || (!isLeft && _refFromRight);
             if (isReferenceSide)
             {
                 int baseH = MountainPieceData.GetHeight(PieceType.AngleL);
@@ -214,7 +231,7 @@ public class MountainWFCGenerator
                 int rawTarget = _recipe.GetTargetX(heightRatio);
 
                 // Convertir distance-du-bord en position X réelle
-                if (_recipe.referenceFromRight)
+                if (_refFromRight)
                     _currentTargetX = _gridWidth - 1 - rawTarget;
                 else
                     _currentTargetX = rawTarget;
@@ -231,7 +248,7 @@ public class MountainWFCGenerator
 
                 // Convertir en X réel puis ajouter/soustraire l'épaisseur
                 int refXReal;
-                if (_recipe.referenceFromRight)
+                if (_refFromRight)
                     refXReal = _gridWidth - 1 - rawRefTarget;
                 else
                     refXReal = rawRefTarget;
@@ -240,7 +257,7 @@ public class MountainWFCGenerator
                 int targetThickness = (_recipe.thicknessMin + _recipe.thicknessMax) / 2;
                 if (targetThickness > 0)
                 {
-                    if (_recipe.referenceFromRight)
+                    if (_refFromRight)
                         _currentTargetX = refXReal - targetThickness;
                     else
                         _currentTargetX = refXReal + targetThickness;
@@ -261,31 +278,50 @@ public class MountainWFCGenerator
                 // pour que le spectateur se rapproche avant l'ouverture
                 _baseThickness = _recipe.thicknessMin;
 
+                int preExtX = cur.X; // X avant que l'extension pousse la colonne
                 InsertExtensionInline(ref cur, ref last, ref built, isLeft, midHeight);
                 extensionDone = true;
                 consecBord = 0; prevWasTurn = false; prevWasAngle = false;
+
+                // Calculer l'offset d'extension (combien la colonne a bougé vers l'extérieur)
+                int extOff = Mathf.Abs(cur.X - preExtX);
+                if (isLeft) _leftExtOffset = extOff;
+                else _rightExtOffset = extOff;
+                Debug.Log($"[MtnWFC] Extension offset ({(isLeft ? "L" : "R")}): preX={preExtX} postX={cur.X} offset={extOff}");
 
                 // Après l'extension : rétablir l'épaisseur moyenne
                 _baseThickness = (_recipe.thicknessMin + _recipe.thicknessMax) / 2;
                 continue;
             }
-            // ── Épaisseur trop faible → arrêter la colonne et fermer le top ──
+            // ── Garde anti-crossover ────────────────────────────────────────
+            // midTotalHeight est sacré : on NE COUPE JAMAIS la boucle.
+            // ChooseMidPiece gère déjà remaining <= 3 (bords uniquement).
+            // Le verrou BuildTop ferme proprement les pics.
+            // On n'intervient ici que si l'épaisseur tombe à 1 case
+            // (risque de croisement des colonnes) → bord droit de sécurité.
             int currentThickness;
             if (isLeft)
                 currentThickness = _baseRightX - cur.X;
             else
                 currentThickness = cur.X - _baseLeftX;
 
-            if (currentThickness <= 3 && remaining <= 6)
+            if (currentThickness <= 1)
             {
-                Debug.Log($"[MtnWFC] Colonne {(isLeft ? "G" : "D")} stoppée : " +
-                          $"épaisseur={currentThickness} X={cur.X} remaining={remaining}");
-                break; // Sortir de la boucle → BuildTop fermera le top
+                PieceType bSafe = isLeft ? PieceType.BorderSimpleL : PieceType.BorderSimpleR;
+                MountainAnchor safeAnchor = MountainPieceData.GetAnchorOut(last, cur, bSafe);
+                Add(bSafe, safeAnchor);
+                built += MountainPieceData.GetHeight(bSafe);
+                cur = safeAnchor;
+                last = bSafe;
+                consecBord += 1;
+                prevWasTurn = false;
+                prevWasAngle = false;
+                continue;
             }
 
             PieceType next = ChooseMidPiece(
                 last, isLeft, tier, remaining,
-                consecBord, prevWasTurn, prevWasAngle);
+                consecBord, prevWasTurn, prevWasAngle, currentThickness);
 
             // Toutes les pièces sont des sprites uniques placés via GetAnchorOut
             MountainAnchor nextAnchor = MountainPieceData.GetAnchorOut(last, cur, next);
@@ -331,8 +367,8 @@ public class MountainWFCGenerator
             prevWasAngle = isAngle;
 
             // Mettre à jour le X du côté référence
-            bool isRefSide = (isLeft && !_recipe.referenceFromRight)
-                          || (!isLeft && _recipe.referenceFromRight);
+            bool isRefSide = (isLeft && !_refFromRight)
+                          || (!isLeft && _refFromRight);
             if (isRefSide) _refSideLastX = cur.X;
 
             // Tracker la distance depuis le dernier retract
@@ -346,14 +382,14 @@ public class MountainWFCGenerator
         }
 
         // ── Rattrapage final : si le X cible n'est pas atteint ───────────────
-        bool isRefFinal = (isLeft && !_recipe.referenceFromRight)
-                       || (!isLeft && _recipe.referenceFromRight);
+        bool isRefFinal = (isLeft && !_refFromRight)
+                       || (!isLeft && _refFromRight);
         if (isRefFinal)
         {
             int baseH = MountainPieceData.GetHeight(PieceType.AngleL);
             float finalRatio = (float)(baseH + built) / (baseH + midHeight + 2);
             int rawFinal = _recipe.GetTargetX(finalRatio);
-            int finalTarget = _recipe.referenceFromRight
+            int finalTarget = _refFromRight
                 ? _gridWidth - 1 - rawFinal : rawFinal;
             finalTarget = Mathf.Clamp(finalTarget, 0, _gridWidth - 1);
 
@@ -404,7 +440,8 @@ public class MountainWFCGenerator
 
     private PieceType ChooseMidPiece(
         PieceType last, bool isLeft, int tier, int remaining,
-        int consecBordHeight, bool prevWasTurn, bool prevWasAngle)
+        int consecBordHeight, bool prevWasTurn, bool prevWasAngle,
+        int currentThickness = 99)
     {
         PieceType bS = isLeft ? PieceType.BorderSimpleL : PieceType.BorderSimpleR;
         PieceType bD = isLeft ? PieceType.BorderDoubleL : PieceType.BorderDoubleR;
@@ -415,6 +452,10 @@ public class MountainWFCGenerator
         PieceType aRet = isLeft ? PieceType.AngleTopG : PieceType.AngleTopD;
 
         var opts = new System.Collections.Generic.List<(PieceType t, int w)>();
+
+        // ── Épaisseur critique : bloquer retract (réduirait à ≤1) ──────────
+        // Expand, virages et bords restent autorisés → variété préservée.
+        bool blockRetract = (currentThickness <= 2);
 
         // ── Bloquer expand ET retract si déjà au bord de la grille ──────────
         // AngleL, AngleR, AngleTopG, AngleTopD changent tous le X.
@@ -431,17 +472,7 @@ public class MountainWFCGenerator
             return Pick(opts);
         }
 
-        // Si au bord : forcer uniquement des pièces qui ne changent PAS le X
-        if (atGridEdge)
-        {
-            opts.Add((bS, 5));
-            if (remaining >= 2) opts.Add((bD, 3));
-            // Virages autorisés (ne changent pas X, seulement visuel)
-            if (consecBordHeight >= 2 && remaining >= 4) opts.Add((tS, 2));
-            if (consecBordHeight >= 3 && remaining >= 5) opts.Add((tL, 1));
-            if (consecBordHeight >= 4 && remaining >= 6) opts.Add((tXL, 1));
-            return Pick(opts);
-        }
+        // (doublon supprimé — déjà géré au-dessus)
 
         // ── Calcul orientation X (en premier pour être disponible partout) ────
         bool needExpand = false;
@@ -483,8 +514,8 @@ public class MountainWFCGenerator
         // Côté spectateur : suit doucement pour garder l'épaisseur
         bool isRefSide2 = (_currentTargetX >= 0 && _currentColumnX >= 0);
         bool isSpectator = isRefSide2 && (
-            (isLeft && _recipe.referenceFromRight) ||
-            (!isLeft && !_recipe.referenceFromRight));
+            (isLeft && _refFromRight) ||
+            (!isLeft && !_refFromRight));
 
         if (xDiff >= 1 && consecBordHeight >= 1 && !prevWasAngle && !prevWasTurn)
         {
@@ -493,10 +524,12 @@ public class MountainWFCGenerator
             {
                 if (xDiff < 1) goto skipOrientation;
 
-                // Poids modéré — entre passif et agressif
-                expandW = Mathf.Min(xDiff * 2, 8);
-                retractW = Mathf.Min(xDiff * 2, 8);
-                bordW = 3;
+                // Poids IDENTIQUES au côté référence — le spectateur
+                // doit suivre aussi agressivement que la référence
+                // pour que le profil soit symétrique gauche/droite.
+                expandW = Mathf.Min(xDiff * 3, 12);
+                retractW = Mathf.Min(xDiff * 3, 12);
+                bordW = 2;
             }
             else
             {
@@ -517,7 +550,7 @@ public class MountainWFCGenerator
                         opts.Add((aExp, expandW));
                 }
             }
-            if (needRetract)
+            if (needRetract && !blockRetract)
             {
                 opts.Add((aRet, retractW));
             }
@@ -555,7 +588,7 @@ public class MountainWFCGenerator
                 else if ((_heightSinceRetract < 0 || _heightSinceRetract >= 4) && !atGridEdge)
                     opts.Add((aExp, ew));
             }
-            if (needRetract && remaining >= 1)
+            if (needRetract && !blockRetract && remaining >= 1)
             {
                 opts.Add((aRet, xDiff >= 2 ? 10 : 5));
             }
@@ -564,11 +597,17 @@ public class MountainWFCGenerator
             if (opts.Count > 0) return Pick(opts);
         }
 
-        // ── RÈGLE : max 3 hauteur de bords consécutifs ───────────────────────
-        if (consecBordHeight >= 3)
+        // ── RÈGLE : max 2 hauteur de bords avant de favoriser un spécial ────
+        // (abaissé de 3 à 2 pour plus de variété, mais bords restent possibles)
+        if (consecBordHeight >= 2)
         {
-            if (remaining >= 4) opts.Add((tS, 3));
-            if (remaining >= 5) opts.Add((tL, 2));
+            // Bords toujours possibles pour garder la colonne stable
+            opts.Add((bS, 2));
+            if (remaining >= 2) opts.Add((bD, 1));
+            // Virages — haute probabilité pour casser la monotonie
+            if (remaining >= 4) opts.Add((tS, 4));
+            if (remaining >= 5) opts.Add((tL, 3));
+            if (remaining >= 6) opts.Add((tXL, 2));
             if (remaining >= 3)
             {
                 bool canExp = isLeft ? _recipe.CanExpandSecret(tier) : _recipe.CanExpandBiome(tier);
@@ -576,33 +615,32 @@ public class MountainWFCGenerator
                 {
                     // LOI VIRAGE : remplacer expand par Turn si trop proche d'un retract
                     if (_heightSinceRetract == 1 && remaining >= 3)
-                        opts.Add((tS, 3)); // TurnShort remplace retract+1bord+expand
+                        opts.Add((tS, 3));
                     else if (_heightSinceRetract == 2 && remaining >= 4)
-                        opts.Add((tL, 3)); // TurnLarge remplace retract+2bords+expand
-                    else if (_heightSinceRetract == 3)
-                    { } // INTERDIT — pas de sprite pour 3 hauteur
+                        opts.Add((tL, 3));
+                    else if (_heightSinceRetract == 3 && remaining >= 5)
+                        opts.Add((tXL, 2));
                     else if (_heightSinceRetract < 0 || _heightSinceRetract >= 4)
-                        opts.Add((aExp, needExpand ? 4 : 2));
+                        opts.Add((aExp, needExpand ? 3 : 1));
                 }
             }
-            if (remaining >= 3)
+            if (remaining >= 3 && !blockRetract)
             {
                 bool canRet = isLeft ? _recipe.CanRetractSecret(tier) : _recipe.CanRetractBiome(tier);
-                if (canRet) opts.Add((aRet, needRetract ? 4 : 2));
+                if (canRet) opts.Add((aRet, needRetract ? 3 : 1));
             }
-            if (opts.Count > 0) return Pick(opts);
-            // Fallback si rien de spécial possible : bord simple
-            return bS;
+            return Pick(opts);
         }
 
         // ── RÈGLE : pas 2 BorderSimple d'affilé → utiliser BorderDouble ──────
         if (consecBordHeight == 1 && last == bS)
         {
             // Après 1 BorderSimple : préférer BorderDouble (= total 3 de haut)
-            if (remaining >= 2) opts.Add((bD, 6));
+            if (remaining >= 2) opts.Add((bD, 5));
             // Ou éléments spéciaux si 2 cases de bord suffisent
-            if (remaining >= 4) opts.Add((tS, 2));
-            if (remaining >= 5) opts.Add((tL, 1));
+            if (remaining >= 4) opts.Add((tS, 3));
+            if (remaining >= 5) opts.Add((tL, 2));
+            if (remaining >= 6) opts.Add((tXL, 1));
             if (remaining >= 3)
             {
                 bool canExp = isLeft ? _recipe.CanExpandSecret(tier) : _recipe.CanExpandBiome(tier);
@@ -611,10 +649,10 @@ public class MountainWFCGenerator
                     if (_heightSinceRetract == 1) opts.Add((tS, 2));
                     else if (_heightSinceRetract == 2) opts.Add((tL, 2));
                     else if (_heightSinceRetract == 3) opts.Add((tXL, 2));
-                    else if (!atGridEdge) opts.Add((aExp, 1));
+                    else if (!atGridEdge) opts.Add((aExp, 2));
                 }
             }
-            if (remaining >= 3)
+            if (remaining >= 3 && !blockRetract)
             {
                 bool canRet = isLeft ? _recipe.CanRetractSecret(tier) : _recipe.CanRetractBiome(tier);
                 if (canRet) opts.Add((aRet, 1));
@@ -623,30 +661,7 @@ public class MountainWFCGenerator
             return bS;
         }
 
-        // ── RÈGLE : après BorderDouble (2 cases) → spécial ou 1 BorderSimple ─
-        if (consecBordHeight == 2)
-        {
-            opts.Add((bS, 3)); // 1 simple pour arriver à 3 → puis spécial
-            if (remaining >= 4) opts.Add((tS, 2));
-            if (remaining >= 5) opts.Add((tL, 1));
-            if (remaining >= 3)
-            {
-                bool canExp = isLeft ? _recipe.CanExpandSecret(tier) : _recipe.CanExpandBiome(tier);
-                if (canExp)
-                {
-                    if (_heightSinceRetract == 1) opts.Add((tS, 2));
-                    else if (_heightSinceRetract == 2) opts.Add((tL, 2));
-                    else if (_heightSinceRetract == 3) opts.Add((tXL, 2));
-                    else if (!atGridEdge) opts.Add((aExp, 1));
-                }
-            }
-            if (remaining >= 3)
-            {
-                bool canRet = isLeft ? _recipe.CanRetractSecret(tier) : _recipe.CanRetractBiome(tier);
-                if (canRet) opts.Add((aRet, 1));
-            }
-            return Pick(opts);
-        }
+        // (consecBordHeight == 2 désormais capté par la règle >= 2 ci-dessus)
 
         // ── Début de section (0 bords) → commencer par un bord ───────────────
         if (remaining >= 2) opts.Add((bD, 4));
@@ -706,17 +721,35 @@ public class MountainWFCGenerator
         int curY = cur.Y + MountainPieceData.GetHeight(last);
         int extX = colX;
 
+        // ── 0. Garantir au moins 1 bord entre un retract et l'angle d'ouverture ─
+        //   Si last est un angle (retract), PostProcessVirages ne peut pas détecter
+        //   la composition sans bord intermédiaire (bordCount serait 0).
+        bool lastIsAngle = (last == PieceType.AngleTopG || last == PieceType.AngleTopD ||
+                            last == PieceType.AngleL || last == PieceType.AngleR);
+        if (lastIsAngle)
+        {
+            Add(bSimple, new MountainAnchor(extX, curY));
+            curY += 1;
+            built += 1;
+            cur = new MountainAnchor(extX, curY - 1);
+            last = bSimple;
+        }
+
         // ── 1. AngleR/L d'ouverture (PostProcessVirages remplacera si nécessaire) ─
+        //   openY = curY - hAngle + 1 → conforme à GetAnchorOut (bord→angle)
+        //   On NE PAS incrémenter curY ici : angle et faces sont calculés
+        //   depuis le même curY pour aligner leurs hauts.
+        //     angle.top = (curY - hAngle + 1) + hAngle - 1 = curY
+        //     face.top  = (curY - hFace + 1)  + hFace - 1  = curY   ✓
         extX += dx;
         int openY = curY - hAngle + 1;
         Add(angleFace, new MountainAnchor(extX, openY));
-        curY += 1;
-        built += 1;
+        // curY et built incrémentés après les faces (étape 3)
 
         // ── 2. FaceLeft (x+dx) ───────────────────────────────────────────────
         extX += dx;
         PieceType face1 = isLeft ? PieceType.FaceRight : PieceType.FaceLeft;
-        int faceY = curY - hFace + 1; // haut aligné avec haut de l'ouverture
+        int faceY = curY - hFace + 1; // même curY → haut aligné avec l'angle
         Add(face1, new MountainAnchor(extX, faceY));
 
         // ── 3. FaceRight/Cave (x+dx) ────────────────────────────────────────
@@ -726,12 +759,14 @@ public class MountainWFCGenerator
             ? (isLeft ? PieceType.FaceLeftCave : PieceType.FaceRightCave)
             : face2raw;
         Add(face2, new MountainAnchor(extX, faceY));
-        curY += 1;
-        built += 1;
+        curY += 2;   // +1 angle (étape 1) + +1 faces (étape 3)
+        built += 2;  // idem
 
         // ── 4. AngleR/L de fermeture (x+dx) ─────────────────────────────────
+        //   -1 par rapport à l'ancienne formule : close.top = face.top + 1
+        //   (curY vaut maintenant +2 d'un coup, donc closeY doit compenser)
         extX += dx;
-        int closeY = curY - hAngle + 1;
+        int closeY = curY - hAngle;
         Add(angleFace, new MountainAnchor(extX, closeY));
         curY += 1;
         built += 1;
@@ -819,46 +854,59 @@ public class MountainWFCGenerator
     private void BuildTop(MountainAnchor leftAnchor, PieceType leftLast,
                           MountainAnchor rightAnchor, PieceType rightLast)
     {
-        // ── Montagne ÉTROITE (base ≤ 5) : fermeture plate sans pic ──────
-        int baseThickness = _baseRightX - _baseLeftX;
-        if (baseThickness <= 3)
+        // ── VERROU TOP — fermeture plate si sommet étroit ─────────────────
+        // topThickness = écart BRUT entre les deux colonnes au sommet.
+        // effectiveThickness = écart SANS l'offset des extensions (patterns A/B).
+        //   L'extension pousse la colonne vers l'extérieur sans élargir
+        //   réellement la montagne → on la soustrait pour le verrou.
+        // Deux gardes (sur effectiveThickness, pas topThickness brut) :
+        //   1) Recipe : si topClosureThreshold > 0 et effective ≤ seuil → plat
+        //   2) Sécurité absolue : si effective ≤ 2 → plat TOUJOURS
+        //      (≤2 = quasi-croisement, géométriquement impossible de fermer)
+        //      (≤3 était trop agressif — fermait des montagnes normales)
+        int topThickness = rightAnchor.X - leftAnchor.X;
+        int effectiveThickness = topThickness - _leftExtOffset - _rightExtOffset;
+        Debug.Log($"[MtnWFC] BuildTop check : épTop={topThickness} effective={effectiveThickness} " +
+                  $"extOffsets=L{_leftExtOffset}/R{_rightExtOffset} " +
+                  $"seuil={_recipe.topClosureThreshold} leftX={leftAnchor.X} rightX={rightAnchor.X}");
+
+        bool verrouRecipe = _recipe.topClosureThreshold > 0 &&
+            effectiveThickness <= _recipe.topClosureThreshold;
+        bool verrouSafety = effectiveThickness <= 2; // filet absolu — quasi-croisement uniquement
+
+        if (verrouRecipe || verrouSafety)
         {
-            // Fermer au Y le plus BAS des deux colonnes
+            // Y du haut de chaque colonne (sans toucher aux pièces existantes)
             int leftTopY = leftAnchor.Y + MountainPieceData.GetHeight(leftLast);
             int rightTopY = rightAnchor.Y + MountainPieceData.GetHeight(rightLast);
-            int closureY = Mathf.Min(leftTopY, rightTopY);
 
-            // Supprimer les pièces de colonne au-dessus de closureY
-            // Garder les faces d'extension intactes
-            Placements.RemoveAll(p => p.gridY >= closureY
-                && p.type != PieceType.FaceLeft && p.type != PieceType.FaceRight);
+            // On aligne au Y le plus HAUT (pas le plus bas — on comble la plus courte)
+            int closureY = Mathf.Max(leftTopY, rightTopY);
 
-            // Trouver le X gauche et droit juste sous la fermeture
-            int leftX = leftAnchor.X;
-            int rightX = rightAnchor.X;
-            foreach (var p in Placements)
+            // Combler la colonne la plus courte avec des BorderSimple
+            if (leftTopY < closureY)
             {
-                if (p.gridY >= closureY - 2 && p.gridY < closureY)
-                {
-                    if (p.type == PieceType.BorderSimpleL || p.type == PieceType.BorderDoubleL
-                        || p.type == PieceType.TurnShortL || p.type == PieceType.TurnLargeL
-                        || p.type == PieceType.TurnExtraLargeL)
-                        leftX = Mathf.Min(leftX, p.gridX);
-                    if (p.type == PieceType.BorderSimpleR || p.type == PieceType.BorderDoubleR
-                        || p.type == PieceType.TurnShortR || p.type == PieceType.TurnLargeR
-                        || p.type == PieceType.TurnExtraLargeR)
-                        rightX = Mathf.Max(rightX, p.gridX);
-                }
+                for (int fy = leftTopY; fy < closureY; fy++)
+                    Add(PieceType.BorderSimpleL, new MountainAnchor(leftAnchor.X, fy));
+            }
+            if (rightTopY < closureY)
+            {
+                for (int fy = rightTopY; fy < closureY; fy++)
+                    Add(PieceType.BorderSimpleR, new MountainAnchor(rightAnchor.X, fy));
             }
 
-            // Fermeture : AngleTopG + TopEdge + AngleTopD
+            // Fermeture plate : AngleTopG + TopEdge × n + AngleTopD
+            int leftX = leftAnchor.X;
+            int rightX = rightAnchor.X;
             Add(PieceType.AngleTopG, new MountainAnchor(leftX, closureY));
             for (int fx = leftX + 1; fx < rightX; fx++)
                 Add(PieceType.TopEdge, new MountainAnchor(fx, closureY));
             Add(PieceType.AngleTopD, new MountainAnchor(rightX, closureY));
 
             SommetY = closureY + 2;
-            Debug.Log($"[MtnWFC] Top étroit : Y={closureY} X=[{leftX},{rightX}] ép={baseThickness}");
+            string raison = verrouSafety ? "SAFETY(épTop≤3)" : "RECIPE";
+            Debug.Log($"[MtnWFC] VERROU Top ({raison}) : Y={closureY} X=[{leftX},{rightX}] " +
+                      $"épTop={topThickness} seuil={_recipe.topClosureThreshold}");
             return;
         }
 
@@ -903,10 +951,14 @@ public class MountainWFCGenerator
         // ── Extension au TOP (tier 4) ────────────────────────────────────────
         if (_recipe.hasExtension && _recipe.extensionTier == 4)
         {
-            bool extLeft = _recipe.extensionOnLeft;
+            bool extLeft = _extOnLeft;
             if (extLeft)
             {
+                int preExtX = leftCur.X;
                 InsertExtensionInline(ref leftCur, ref leftTypeCur, ref _dummyBuilt, true);
+                int extOff = Mathf.Abs(leftCur.X - preExtX);
+                _leftExtOffset = extOff;
+                Debug.Log($"[MtnWFC] Extension T4 offset (L): preX={preExtX} postX={leftCur.X} offset={extOff}");
                 // Réaligner la droite à la même hauteur
                 int newTargetY = leftCur.Y + MountainPieceData.GetHeight(leftTypeCur);
                 FillColumnToHeight(ref rightCur, ref rightTypeCur, newTargetY, false);
@@ -914,7 +966,11 @@ public class MountainWFCGenerator
             else
             {
                 int dummyBuilt = 0;
+                int preExtX = rightCur.X;
                 InsertExtensionInline(ref rightCur, ref rightTypeCur, ref dummyBuilt, false);
+                int extOff = Mathf.Abs(rightCur.X - preExtX);
+                _rightExtOffset = extOff;
+                Debug.Log($"[MtnWFC] Extension T4 offset (R): preX={preExtX} postX={rightCur.X} offset={extOff}");
                 // Réaligner la gauche
                 int newTargetY = rightCur.Y + MountainPieceData.GetHeight(rightTypeCur);
                 FillColumnToHeight(ref leftCur, ref leftTypeCur, newTargetY, true);
@@ -976,10 +1032,15 @@ public class MountainWFCGenerator
 
         int curX = startX;
         int curY = topY;
+        int maxYReached = topY; // Tracker le Y max pour ne pas détruire les pièces Y+1
 
-        // ── MONTAGNE ÉTROITE (totalWidth <= 3) → TOP PLAT, pas de cassure ────
-        // Forcer AngleTopG + TopEdge × N + AngleTopD tous au même Y
-        if (totalWidth <= 3)
+        // ── TOP ÉTROIT → forcer un sommet plat sans cassure ──────────────
+        // Garde géométrique de sécurité : si la largeur du top est trop
+        // étroite, pas de cassure (elle produirait un pic).
+        // Utilise topClosureThreshold si > 0, sinon filet à 3.
+        int topFlatThreshold = (_recipe.topClosureThreshold > 0)
+            ? _recipe.topClosureThreshold : 3;
+        if (totalWidth <= topFlatThreshold)
         {
             while (curX < endX)
             {
@@ -1017,6 +1078,7 @@ public class MountainWFCGenerator
                             if (curX == cassureX)
                             {
                                 curY += 1;
+                                maxYReached = Mathf.Max(maxYReached, curY);
                                 Add(PieceType.AngleTopG,
                                     new MountainAnchor(curX, curY));
                                 curX++;
@@ -1042,6 +1104,7 @@ public class MountainWFCGenerator
                             if (curX == cassure1X)
                             {
                                 curY += 1;
+                                maxYReached = Mathf.Max(maxYReached, curY);
                                 Add(PieceType.AngleTopG,
                                     new MountainAnchor(curX, curY));
                                 curX++;
@@ -1104,7 +1167,8 @@ public class MountainWFCGenerator
             Add(PieceType.BorderSimpleR, new MountainAnchor(endX, fillY));
         }
 
-        int closureYLarge = Mathf.Max(topY, curY);
+        // maxYReached tient compte des cassures Y+1 (config 2 : monte+descend)
+        int closureYLarge = Mathf.Max(topY, Mathf.Max(curY, maxYReached));
         SommetY = closureYLarge + 2;
 
         // Nettoyage filet de sécurité — supprimer toute pièce au-dessus du top
@@ -1229,17 +1293,17 @@ public class MountainWFCGenerator
 
             if (isRetractL || isRetractR)
             {
-                // Compter les bords qui suivent
-                int bordCount = 0;
+                // Compter la HAUTEUR totale des bords qui suivent (en cellules)
+                int bordHeight = 0;
                 int j = i + 1;
                 while (j < Placements.Count && IsBorder(Placements[j].type))
                 {
-                    bordCount++;
+                    bordHeight += MountainPieceData.GetHeight(Placements[j].type);
                     j++;
                 }
 
                 // Vérifier s'il y a un expand (AngleL/R) après les bords
-                if (j < Placements.Count && bordCount >= 1 && bordCount <= 3)
+                if (j < Placements.Count && bordHeight >= 1 && bordHeight <= 3)
                 {
                     var expandP = Placements[j];
                     bool isExpandL = expandP.type == PieceType.AngleL;
@@ -1254,11 +1318,11 @@ public class MountainWFCGenerator
                         bool left = sameLeft;
                         PieceType turnType;
 
-                        if (bordCount == 1)
+                        if (bordHeight == 1)
                             turnType = left ? PieceType.TurnShortL : PieceType.TurnShortR;
-                        else if (bordCount == 2)
+                        else if (bordHeight == 2)
                             turnType = left ? PieceType.TurnLargeL : PieceType.TurnLargeR;
-                        else // bordCount == 3
+                        else // bordHeight == 3
                             turnType = left ? PieceType.TurnExtraLargeL : PieceType.TurnExtraLargeR;
 
                         // Le virage se place à la position de l'AngleTop (retract)
@@ -1283,18 +1347,21 @@ public class MountainWFCGenerator
                             gridY = turnY
                         });
 
-                        // Ajuster les faces qui suivent (si extension)
+                        // Ajuster TOUTES les pièces d'extension qui suivent
+                        // (faces + angle de fermeture + bords + retour)
+                        // On décale tant que X reste « côté extension » par rapport
+                        // à la position colonne (= X du dernier bord avant l'expand).
                         int nextIdx = j + 1;
+                        int colResumeX = Placements[j - 1].gridX;
+
                         while (nextIdx < Placements.Count)
                         {
                             var nextP = Placements[nextIdx];
-                            bool isFace = nextP.type == PieceType.FaceLeft ||
-                                          nextP.type == PieceType.FaceRight ||
-                                          nextP.type == PieceType.FaceLeftCave ||
-                                          nextP.type == PieceType.FaceRightCave;
-                            if (!isFace) break;
 
-                            // Ajuster Y des faces
+                            // Arrêter quand X revient à la position colonne
+                            if (left && nextP.gridX >= colResumeX) break;
+                            if (!left && nextP.gridX <= colResumeX) break;
+
                             result.Add(new Placement
                             {
                                 type = nextP.type,
@@ -1348,7 +1415,8 @@ public class MountainWFCGenerator
                 int gap = next.gridY - curTop;
 
                 // Gap positif = espace vide entre les deux pièces
-                if (gap > 0 && gap <= 3 && Mathf.Abs(next.gridX - current.gridX) <= 1)
+                // Tolérance élargie : gap <= 6 et ΔX <= 2 pour couvrir plus de cas
+                if (gap > 0 && gap <= 6 && Mathf.Abs(next.gridX - current.gridX) <= 2)
                 {
                     // Déterminer le côté pour le bord de remplissage
                     bool isLeftSide = IsLeftPiece(current.type) || IsLeftPiece(next.type);

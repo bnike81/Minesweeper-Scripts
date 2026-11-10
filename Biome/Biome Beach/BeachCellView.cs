@@ -13,6 +13,7 @@ public class BeachCellView : CellViewBase, ITreeLayer
 
     [Header("=== Palmiers ===")]
     [SerializeField] private SpriteRenderer _treeLayerRenderer;
+    public SpriteRenderer TreeLayerRenderer => _treeLayerRenderer;
     [SerializeField] private Sprite _palmTrunkSprite;
     [SerializeField] private Sprite _palmCanopySprite;
     [SerializeField] private Sprite _palmCimeSprite;
@@ -61,7 +62,7 @@ public class BeachCellView : CellViewBase, ITreeLayer
 
     protected override void ShowHidden()
     {
-        if (_cell != null && _cell.IsMountainReserved)
+        if (_cell != null && (_cell.IsMountainReserved || _cell.IsCoastWater))
         {
             SetBg(null); HideTreeLayer(); HideIcon(); HideNumber(); return;
         }
@@ -89,7 +90,7 @@ public class BeachCellView : CellViewBase, ITreeLayer
 
     protected override void ShowRevealed()
     {
-        if (_cell != null && _cell.IsMountainReserved)
+        if (_cell != null && (_cell.IsMountainReserved || _cell.IsCoastWater))
         {
             SetBg(null); HideTreeLayer(); HideIcon(); HideNumber(); return;
         }

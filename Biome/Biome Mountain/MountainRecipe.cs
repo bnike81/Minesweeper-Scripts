@@ -101,6 +101,16 @@ public class MountainRecipe : ScriptableObject
     [Tooltip("Cassure possible dans le bord top")]
     public bool allowTopBreak = true;
     [Range(0f, 1f)] public float topBreakChance = 0.35f;
+    [Tooltip("Si > 0, fermeture plate quand effectiveThickness ≤ ce seuil. 0 = désactivé (filet ≤2 reste actif)")]
+    [Range(0, 8)] public int topClosureThreshold = 0;
+
+    // =========================================================================
+    // MIROIR
+    // =========================================================================
+
+    [Header("=== Miroir ===")]
+    [Tooltip("50% de chance d'inverser référence ET extension ensemble")]
+    public bool allowMirror = false;
 
     // =========================================================================
     // SPAWN

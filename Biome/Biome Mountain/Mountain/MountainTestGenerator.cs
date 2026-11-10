@@ -17,13 +17,35 @@ public class MountainTestGenerator : MonoBehaviour
     [SerializeField] private int _baseY = 10;
     [SerializeField] private int _gridWidth = 16;
 
+    [Header("Mode Spawner (simule le calcul de MountainSpawner)")]
+    [Tooltip("Activer pour calculer baseY comme MountainSpawner le fait en jeu")]
+    [SerializeField] private bool _simulateSpawner = false;
+    [Tooltip("Hauteur de la grille simulée (gm.Height)")]
+    [SerializeField] private int _simulatedGridHeight = 40;
+
     private MountainWFCGenerator _wfc;
 
     [ContextMenu("Test Generate Mountain")]
     public void TestGenerate()
     {
+        int bx = _baseX;
+        int by = _baseY;
+        int gw = _gridWidth;
+
+        if (_simulateSpawner)
+        {
+            // Reproduire exactement le calcul de MountainSpawner
+            int ext = _recipe.spawnAtLevel >= 4 ? (_recipe.spawnAtLevel - 3) * 16 : 16;
+            int totalMtnHeight = _recipe.midTotalHeight + 12; // base(5) + mid + top(~7)
+            by = _simulatedGridHeight - ext + ext / 3;
+            by = Mathf.Clamp(by, 4, _simulatedGridHeight - totalMtnHeight - 2);
+            bx = gw / 2;
+            Debug.Log($"[MtnTest] Mode Spawner : baseX={bx} baseY={by} " +
+                      $"gridH={_simulatedGridHeight} ext={ext} mtnH={totalMtnHeight}");
+        }
+
         _wfc = new MountainWFCGenerator();
-        _wfc.Generate(_recipe, _baseX, _baseY, _gridWidth);
+        _wfc.Generate(_recipe, bx, by, gw);
         Debug.Log($"[MtnTest] {_wfc.Placements.Count} pièces générées, sommet Y={_wfc.SommetY}");
     }
 

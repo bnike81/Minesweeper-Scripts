@@ -1,10 +1,11 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// CampSpawner - Place le campement abandonne au niveau 2.
-/// Zone centrale du niveau 2. Compose de tente, feu de camp, accessoire.
+/// CampSpawner - Place le campement abandonne.
+/// _spawnAtLevel contrôle le level de spawn (Inspector).
+/// Réserve ET spawne au MÊME level.
 /// </summary>
 public class CampSpawner : MonoBehaviour
 {
@@ -16,15 +17,11 @@ public class CampSpawner : MonoBehaviour
     [SerializeField] private GameObject _accessoirePrefab;
 
     [Header("=== Protection ===")]
-    [Tooltip("Rayon sans danger autour du campement")]
     [SerializeField, Range(1f, 8f)] private float _protectionRadius = 3.5f;
 
     [Header("=== Placement Zone ===")]
-    [Tooltip("Marge depuis les bords de la grille")]
     [SerializeField, Range(1, 5)] private int _edgeMargin = 3;
-    [Tooltip("Demi-hauteur de la zone centrale niveau 2")]
     [SerializeField, Range(2, 8)] private int _centralRange = 5;
-    
 
     [Header("=== Probabilites de Zone ===")]
     [SerializeField, Range(0f, 1f)] private float _cornerBias = 0.35f;
@@ -40,14 +37,16 @@ public class CampSpawner : MonoBehaviour
     [Header("=== Graine ===")]
     [SerializeField] private int _seed = 0;
 
+    [Header("=== Level de spawn ===")]
+    [Tooltip("Level d'extension où le camp apparaît. Avec prologue : 3")]
+    [SerializeField] private int _spawnAtLevel = 3;
+
     private System.Random _rng;
     private float _cellStep;
     private Vector2Int _origin;
     private List<Vector2Int> _occupied = new();
     private List<GameObject> _spawned = new();
     private bool _hasSpawned = false;
-
-    // -------------------------------------------------------------------------
 
     private void Awake()
     {
@@ -77,13 +76,11 @@ public class CampSpawner : MonoBehaviour
         _occupied = new List<Vector2Int>();
     }
 
-    // -------------------------------------------------------------------------
-    // Reserve AVANT placement des dangers (niveau 3)
-    // -------------------------------------------------------------------------
+    // ── Réserve AVANT PlaceDangers ───────────────────────────────────────────
 
     private void OnGridExtending(OnGridExtending evt)
     {
-        if (_hasSpawned || evt.Level != 3) return;
+        if (_hasSpawned || evt.Level != _spawnAtLevel) return;
 
         _cellStep = GridManager.Instance?.CellStep ?? 1.05f;
 
@@ -125,16 +122,14 @@ public class CampSpawner : MonoBehaviour
                 gm.ReserveCircle(_origin.x, _origin.y + dy, _protectionRadius - dy + 1);
         }
 
-        Debug.Log("<color=#FF8844>[CampSpawner]</color> Camp reserve en " + _origin);
+        Debug.Log($"[CampSpawner] Réservé en {_origin} level={evt.Level}");
     }
 
-    // -------------------------------------------------------------------------
-    // Spawn apres extension niveau 2
-    // -------------------------------------------------------------------------
+    // ── Spawn APRÈS extension ────────────────────────────────────────────────
 
     private void OnGridExtended(OnGridExtended evt)
     {
-        if (_hasSpawned || evt.Level != 2) return;
+        if (_hasSpawned || evt.Level != _spawnAtLevel) return;
 
         _cellStep = GridManager.Instance?.CellStep ?? 1.05f;
         _hasSpawned = true;
@@ -143,23 +138,20 @@ public class CampSpawner : MonoBehaviour
         SpawnFeu();
         SpawnAccessoires();
 
-        Debug.Log("<color=#FF8844>[CampSpawner]</color> Campement spawne en " + _origin);
+        Debug.Log($"[CampSpawner] Camp spawné en {_origin} level={evt.Level}");
     }
 
-    // -------------------------------------------------------------------------
-    // Elements
-    // -------------------------------------------------------------------------
+    // ── Éléments ─────────────────────────────────────────────────────────────
 
     private void SpawnTente()
     {
         SpawnElement(_tentePrefab, _origin, "Tente", _tenteScale, 4);
         _occupied.Add(_origin);
-        _occupied.Add(_origin + Vector2Int.up); // Y+1 interdit
+        _occupied.Add(_origin + Vector2Int.up);
     }
 
     private void SpawnFeu()
     {
-        // Candidates : feu avec espace vide d'un cote
         var candidates = new List<(Vector2Int feu, Vector2Int vide)>
         {
             (_origin + new Vector2Int( 0, -1), _origin + new Vector2Int(-1, -1)),
@@ -179,8 +171,8 @@ public class CampSpawner : MonoBehaviour
 
             SpawnElement(_feuCampPrefab, feuPos, "FeuDeCamp", _feuCampScale, 5);
             _occupied.Add(feuPos);
-            _occupied.Add(videPos);        // Cote vide reserve
-            _occupied.Add(feuPos + Vector2Int.down); // Y-2 devant le feu = vide
+            _occupied.Add(videPos);
+            _occupied.Add(feuPos + Vector2Int.down);
             break;
         }
     }
@@ -218,9 +210,7 @@ public class CampSpawner : MonoBehaviour
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private GameObject SpawnElement(GameObject prefab, Vector2Int gPos, string label, float scale, int order)
     {
@@ -263,10 +253,6 @@ public class CampSpawner : MonoBehaviour
         return null;
     }
 
-    // -------------------------------------------------------------------------
-    // Dialogue decouverte
-    // -------------------------------------------------------------------------
-
     public void OnCampDiscovered()
     {
         StartCoroutine(CampDiscoveryDialogue());
@@ -275,13 +261,10 @@ public class CampSpawner : MonoBehaviour
     private IEnumerator CampDiscoveryDialogue()
     {
         yield return new WaitForSeconds(0.5f);
-        DialogueBox.Instance?.ShowMessage("Heros",
-            "Tiens donc... un campement abandonne.");
+        DialogueBox.Instance?.ShowMessage("Heros", "Tiens donc... un campement abandonne.");
         yield return new WaitForSeconds(3f);
-        DialogueBox.Instance?.ShowMessage("Heros",
-            "Le feu semble encore utilisable.");
+        DialogueBox.Instance?.ShowMessage("Heros", "Le feu semble encore utilisable.");
         yield return new WaitForSeconds(3f);
-        DialogueBox.Instance?.ShowMessage("Heros",
-            "Quelqu'un est pass� par l�... ou quelque chose.");
+        DialogueBox.Instance?.ShowMessage("Heros", "Quelqu'un est passé par là... ou quelque chose.");
     }
 }
