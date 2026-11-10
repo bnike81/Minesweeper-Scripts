@@ -2,99 +2,45 @@
 using System.Collections.Generic;
 
 /// <summary>
-/// ShepherdFarmSpawner - Place proceduralement la ferme du vieux berger
-/// dans le niveau 1, et les moutons egares aux niveaux 1 et 2.
-///
-/// Logique de placement de la ferme :
-///   - Cherche une zone libre d'au moins 5x5 cases dans la grille niveau 1
-///   - Place la cabane (2x2 cases) en fond de la zone
-///   - Dispose les accessoires (tonneau, paille x2) en arc devant la cabane
-///   - Place le berger devant la cabane ou parmi ses affaires
-///   - Place 1 mouton proche de la ferme dans le secteur du berger
-///   - Jamais dans le coin superieur gauche (premier clic safe)
+/// ShepherdFarmSpawner - Place la ferme du vieux berger et les moutons.
+/// _spawnAtLevel contrôle le chunk de spawn (1=grille initiale, 2+=extension).
+/// Avec prologue : _spawnAtLevel=2, ferme au premier chunk d'extension.
 /// </summary>
 public class ShepherdFarmSpawner : MonoBehaviour
 {
     public static ShepherdFarmSpawner Instance { get; private set; }
-
-    // -------------------------------------------------------------------------
-    // Inspector - Prefabs
-    // -------------------------------------------------------------------------
 
     [Header("=== Prefabs NPC ===")]
     [SerializeField] private GameObject _shepherdPrefab;
     [SerializeField] private GameObject _sheepPrefab;
 
     [Header("=== Prefabs Decors Ferme ===")]
-    [SerializeField] private GameObject _cabinPrefab;      // 32x32 - occupe 2x2 cases
-    [SerializeField] private GameObject _barrelPrefab;     // 16x16 - 1 case
-    [SerializeField] private GameObject _haySmallPrefab;   // 16x16 - 1 case
-    [SerializeField] private GameObject _hayBigPrefab;     // 24x24 - 1 case (deborde un peu)
-
-    // =========================================================================
-    // PLACEMENT DE LA FERME
-    // =========================================================================
+    [SerializeField] private GameObject _cabinPrefab;
+    [SerializeField] private GameObject _barrelPrefab;
+    [SerializeField] private GameObject _haySmallPrefab;
+    [SerializeField] private GameObject _hayBigPrefab;
 
     [Header("--- Ferme : Zone de Recherche ---")]
-    [Tooltip("Taille interne de la ferme en cases (cabane + accessoires)")]
     [SerializeField] private int _minFarmZoneSize = 4;
-
-    [Tooltip("Marge minimale depuis le bord de la grille")]
     [SerializeField, Range(1, 5)] private int _edgeMargin = 2;
+    [SerializeField, Range(1f, 8f)] private float _farmProtectionRadius = 3.5f;
 
-    [Tooltip("Rayon sans danger autour de la ferme. Recommande 2.5 a 3.5")]
-    [SerializeField, Range(1f, 10f)] private float _farmProtectionRadius = 4.0f;
-
-    [Header("--- Ferme : Probabilites de Zone ---")]
-    [Tooltip("Chance que la ferme soit placee dans un COIN de la grille (loin du centre)")]
-    [SerializeField, Range(0f, 1f)] private float _cornerBias = 0.45f;
-
-    [Tooltip("Chance que la ferme soit sur un BORD (mais pas dans un coin)")]
-    [SerializeField, Range(0f, 1f)] private float _edgeBias = 0.30f;
-    // Reste = centre (1 - cornerBias - edgeBias)
-    // Ex defaut : 45% coin + 30% bord + 25% centre
-
-    [Tooltip("Taille de la zone consideree comme 'coin' (en % de la grille par cote)")]
+    [Header("--- Ferme : Biais de zone ---")]
+    [SerializeField, Range(0f, 1f)] private float _cornerBias = 0.30f;
+    [SerializeField, Range(0f, 1f)] private float _edgeBias = 0.35f;
     [SerializeField, Range(0.1f, 0.5f)] private float _cornerZoneRatio = 0.30f;
-
-    [Tooltip("Taille de la zone consideree comme 'bord' (en % de la grille par cote)")]
     [SerializeField, Range(0.1f, 0.4f)] private float _edgeZoneRatio = 0.20f;
 
-    // =========================================================================
-    // PLACEMENT DES MOUTONS
-    // =========================================================================
-
-    [Header("--- Moutons : Distance depuis la Ferme ---")]
-    [Tooltip("Distance MINIMUM des moutons depuis la ferme (cases Chebyshev)")]
-    [SerializeField, Range(3, 12)] private int _sheepMinDistFromFarm = 7;
-
-    [Tooltip("Distance MAXIMUM des moutons depuis la ferme (cases Chebyshev)")]
-    [SerializeField, Range(6, 15)] private int _sheepMaxDistFromFarm = 12;
-
-    [Tooltip("Distance MINIMUM entre deux moutons (evite qu'ils soient cote a cote)")]
+    [Header("--- Moutons ---")]
+    [SerializeField, Range(2, 10)] private int _sheepMinDistFromFarm = 3;
+    [SerializeField, Range(3, 15)] private int _sheepMaxDistFromFarm = 8;
     [SerializeField, Range(2, 8)] private int _sheepMinDistBetween = 4;
-
-    [Header("--- Moutons : Zone de Securite ---")]
-    [Tooltip("Rayon sans danger autour de chaque mouton. Recommande 1.2 a 2.0")]
     [SerializeField, Range(0.5f, 3f)] private float _sheepProtectionRadius = 1.5f;
-
-    [Tooltip("Distance min d un ennemi autour d un mouton - empeche un voisin ennemi direct")]
     [SerializeField, Range(1, 4)] private int _sheepEnemySafeRadius = 2;
-
-    [Tooltip("Nombre max de tentatives pour placer un mouton avant abandon")]
     [SerializeField, Range(30, 150)] private int _sheepPlacementMaxTries = 100;
 
-    // =========================================================================
-    // BERGER
-    // =========================================================================
-
     [Header("--- Berger ---")]
-    [Tooltip("Distance max du berger par rapport a la cabane")]
     [SerializeField, Range(1, 4)] private int _shepherdMaxDist = 2;
-
-    // =========================================================================
-    // TAILLE DES SPRITES
-    // =========================================================================
 
     [Header("--- Tailles ---")]
     [SerializeField, Range(0.5f, 3f)] private float _cabinScale = 1.5f;
@@ -102,49 +48,36 @@ public class ShepherdFarmSpawner : MonoBehaviour
     [SerializeField, Range(0.2f, 2f)] private float _shepherdScale = 0.5f;
     [SerializeField, Range(0.2f, 2f)] private float _sheepScale = 0.5f;
 
-    // =========================================================================
-    // GRAINE
-    // =========================================================================
-
     [Header("--- Graine ---")]
-    [Tooltip("0 = aleatoire a chaque partie. Valeur fixe = meme ferme reproductible")]
     [SerializeField] private int _seed = 0;
 
-    [Header("--- Prologue ---")]
-    [Tooltip("Level où la ferme spawn. 1=grille initiale, 2=première extension")]
+    [Header("--- Level de spawn ---")]
+    [Tooltip("1=grille initiale, 2+=extension. Prologue:2")]
     [SerializeField] private int _spawnAtLevel = 2;
-    private bool _farmReserved;
-    private bool _farmSpawned;
-    // -------------------------------------------------------------------------
-    // Etat interne
-    // -------------------------------------------------------------------------
 
+    // État interne
     private System.Random _rng;
     private float _cellStep;
-    private Vector2Int _farmOrigin;      // Case coin bas-gauche de la ferme
-    private List<Vector2Int> _farmCells; // Toutes les cases occupees par la ferme
+    private Vector2Int _farmOrigin;
+    private List<Vector2Int> _farmCells;
     private List<GameObject> _spawnedObjects = new();
     private List<Vector2Int> _allSheepPositions = new();
+    private bool _farmReserved;
+    private bool _farmSpawned;
 
-    /// <summary>Centre de la ferme pour que les moutons puissent y revenir</summary>
     public Vector2Int FarmOrigin => _farmOrigin;
     public Vector3 FarmWorldPos => new Vector3(
         (_farmOrigin.x + 1) * (_cellStep > 0 ? _cellStep : 1.05f),
         (_farmOrigin.y + 1) * (_cellStep > 0 ? _cellStep : 1.05f), 0f);
 
-    // -------------------------------------------------------------------------
-    // Lifecycle
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // LIFECYCLE
+    // =========================================================================
 
     private void Awake()
     {
         if (Instance != null && Instance != this) { Destroy(gameObject); return; }
         Instance = this;
-
-        // Initialisation de secusite : si OnRunStarted arrive avant Awake
-        // ou si l'ordre d'execution est imprevu, _rng est toujours valide
-        _rng = new System.Random(System.Environment.TickCount);
-        _farmCells = new List<Vector2Int>();
     }
 
     private void OnEnable()
@@ -170,29 +103,23 @@ public class ShepherdFarmSpawner : MonoBehaviour
         int seed = _seed != 0 ? _seed : UnityEngine.Random.Range(1, 99999);
         _rng = new System.Random(seed);
         _farmCells = new List<Vector2Int>();
+        _allSheepPositions = new List<Vector2Int>();
         _farmReserved = false;
         _farmSpawned = false;
+        ClearSpawned();
     }
 
+    // =========================================================================
+    // EVENTS GRILLE
+    // =========================================================================
 
-    /// <summary>
-    /// Recu AVANT SpawnCellViews - on calcule la position de la ferme
-    /// et on reserve la bulle dans GridManager (biome Prairie + exclusion dangers)
-    /// </summary>
     private void OnGridDataReady(OnGridDataReady evt)
     {
-        _cellStep = GridManager.Instance != null
-            ? GridManager.Instance.CellStep : 1.05f;
-
-        if (_spawnAtLevel > 1) return; // Prologue : ferme retardée
+        _cellStep = GridManager.Instance?.CellStep ?? 1.05f;
+        if (_spawnAtLevel > 1) return;
 
         Vector2Int? origin = FindFarmZone(evt.Width, evt.Height);
-        if (!origin.HasValue)
-        {
-            Debug.LogWarning("[ShepherdFarm] Zone introuvable !");
-            _farmOrigin = new Vector2Int(evt.Width / 2 - 2, evt.Height / 2 - 2);
-        }
-        else _farmOrigin = origin.Value;
+        _farmOrigin = origin ?? new Vector2Int(evt.Width / 2 - 2, evt.Height / 2 - 2);
 
         int cx = _farmOrigin.x + _minFarmZoneSize / 2;
         int cy = _farmOrigin.y + _minFarmZoneSize / 2;
@@ -204,74 +131,80 @@ public class ShepherdFarmSpawner : MonoBehaviour
         ClearSpawned();
         _farmCells = new List<Vector2Int>();
         _allSheepPositions = new List<Vector2Int>();
-        _cellStep = GridManager.Instance != null
-            ? GridManager.Instance.CellStep : 1.05f;
+        _cellStep = GridManager.Instance?.CellStep ?? 1.05f;
 
-        if (_spawnAtLevel > 1) return; // Prologue : pas de ferme ici
+        if (_spawnAtLevel > 1)
+        {
+            Debug.Log($"[ShepherdFarm] Ferme retardée au level {_spawnAtLevel}");
+            return;
+        }
 
-        SpawnFarmAtOrigin(evt.Width, evt.Height);
+        SpawnFarmAtOrigin(GridManager.Instance?.Width ?? evt.Width,
+                          GridManager.Instance?.Height ?? evt.Height);
     }
 
     private void OnGridExtending(OnGridExtending evt)
     {
         _cellStep = GridManager.Instance?.CellStep ?? _cellStep;
+        var gm = GridManager.Instance;
+        if (gm == null) return;
 
-        // Réserver la zone ferme au bon level (AVANT PlaceDangers)
+        // ── Level ferme : réserver zone + placer moutons batch 1 AVANT ennemis ──
         if (_spawnAtLevel > 1 && evt.Level == _spawnAtLevel && !_farmReserved)
         {
-            var gm = GridManager.Instance;
-            if (gm != null)
-            {
-                Vector2Int? origin = FindFarmZone(gm.Width, gm.Height);
-                _farmOrigin = origin ?? new Vector2Int(gm.Width / 2 - 2, evt.OldHeight + 2);
+            Vector2Int? origin = FindFarmZone(gm.Width, gm.Height,
+                evt.OldHeight, evt.NewHeight);
+            _farmOrigin = origin ??
+                new Vector2Int(gm.Width / 2 - 2, evt.OldHeight + 2);
 
-                int cx = _farmOrigin.x + _minFarmZoneSize / 2;
-                int cy = _farmOrigin.y + _minFarmZoneSize / 2;
-                gm.ReserveCircle(cx, cy, _farmProtectionRadius);
-                _farmReserved = true;
-            }
+            int cx = _farmOrigin.x + _minFarmZoneSize / 2;
+            int cy = _farmOrigin.y + _minFarmZoneSize / 2;
+            gm.ReserveCircle(cx, cy, _farmProtectionRadius);
+            _farmReserved = true;
+
+            Debug.Log($"[ShepherdFarm] Zone ferme réservée level={evt.Level} " +
+                      $"origin={_farmOrigin}");
+
+            // Batch 1 : dans tout le chunk ferme + léger débordement prologue
+            int sheepCount = QuestManager.Instance?.SheepOnLevel1 ?? 2;
+            int yLo = Mathf.Max(_edgeMargin, evt.OldHeight - 4);
+            int yHi = evt.NewHeight - _edgeMargin;
+            PlaceSheepBeforeEnemies(sheepCount, 0, gm, yLo, yHi);
         }
 
-        // Moutons batch 1 : même level que la ferme (2 moutons)
-        // Avant : level 1 (grille initiale avec la ferme)
-        // Après : level 2 (première extension avec la ferme)
-        // Rien à faire ici — les moutons batch 1 sont placés dans SpawnFarmAtOrigin
-
-        // Moutons batch 2 : level SUIVANT la ferme (2 moutons)
-        // Avant : level 2, Après : level 3
+        // ── Level suivant : moutons batch 2 dans leur chunk ────────────────
         if (evt.Level == _spawnAtLevel + 1)
         {
-            SpawnSheepInZone(
-                QuestManager.Instance?.SheepOnLevel2 ?? 2,
-                evt.Width,
-                evt.NewHeight,
-                evt.OldHeight,
-                QuestManager.Instance?.SheepOnLevel1 ?? 2);
+            int count = QuestManager.Instance?.SheepOnLevel2 ?? 2;
+            int offset = QuestManager.Instance?.SheepOnLevel1 ?? 2;
+            int yLo = evt.OldHeight + _edgeMargin;
+            int yHi = evt.NewHeight - _edgeMargin;
+            PlaceSheepBeforeEnemies(count, offset, gm, yLo, yHi);
+            Debug.Log($"[ShepherdFarm] Moutons batch 2: {count} au level={evt.Level}");
         }
     }
 
     private void OnGridExtended(OnGridExtended evt)
     {
+        // Spawn la ferme VISUELLE (cabane, berger, accessoires)
+        // Les moutons sont déjà placés dans OnGridExtending
         if (_spawnAtLevel > 1 && evt.Level == _spawnAtLevel && !_farmSpawned)
         {
             var gm = GridManager.Instance;
-            if (gm != null)
-            {
-                SpawnFarmAtOrigin(gm.Width, gm.Height);
-                _farmSpawned = true;
-            }
+            if (gm == null) return;
+
+            SpawnFarmAtOrigin(gm.Width, gm.Height);
+            _farmSpawned = true;
+            Debug.Log($"[ShepherdFarm] ✅ Ferme level={evt.Level} origin={_farmOrigin}");
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Spawn de la ferme (niveau 1)
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // SPAWN FERME
+    // =========================================================================
 
     private void SpawnFarmAtOrigin(int gridWidth, int gridHeight)
     {
-        // _farmOrigin est deja calcule et reserve dans OnGridDataReady
-
-        // 2. Placer la cabane (2x2 cases, en haut de la zone)
         Vector2Int cabinPos = new Vector2Int(
             _farmOrigin.x + 1,
             _farmOrigin.y + 2);
@@ -279,76 +212,36 @@ public class ShepherdFarmSpawner : MonoBehaviour
         _farmCells.Add(cabinPos);
         _farmCells.Add(cabinPos + Vector2Int.right);
 
-        // ── Porte de la cabane ────────────────────────────────────────────────
-        // La "porte" est la case devant la cabane (cabinPos.y - 1 = juste en dessous).
-        // On ajoute un BuildingDoorTrigger sur le sprite de la cabane ET
-        // on enregistre la position dans IndoorManager.
         Vector2Int doorPos = new Vector2Int(cabinPos.x, cabinPos.y - 1);
         AttachCabinDoor(cabinPos, doorPos);
 
-        // 3. Disposer les accessoires en arc devant la cabane
         SpawnFarmAccessories(cabinPos);
 
-        // 4. Placer le berger devant la cabane
         Vector2Int shepherdPos = GetShepherdPosition(cabinPos);
         SpawnShepherd(shepherdPos);
-
-        // 5. Placer 1-2 moutons proches de la ferme (niveau 1)
-        int sheepOnL1 = QuestManager.Instance != null
-            ? QuestManager.Instance.SheepOnLevel2 : 2;
-        SpawnSheepNearFarm(sheepOnL1, gridWidth, gridHeight, 0);
-
     }
 
-    // -------------------------------------------------------------------------
-    // Accessoires en arc
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // ACCESSOIRES
+    // =========================================================================
 
     private void SpawnFarmAccessories(Vector2Int cabinPos)
     {
-        // Cabane occupe (cabinPos.x, cabinPos.y) et (cabinPos.x+1, cabinPos.y)
-        //
-        // REGLES :
-        //   Tonneau  : partout SAUF cases laterales adjacentes (X-1,Y) et (X+2,Y)
-        //   Paille   : partout
-        //   Devant   (Y-1, Y-2)          -> order 6 (par dessus cabane)
-        //   Lateral  (X-1 ou X+2, meme Y): order 3 (derriere cabane)
-        //   Derriere (Y+1)               : order 3 (derriere cabane)
-
-        // Tous les emplacements possibles avec leur order
-        // (offset depuis cabinPos, orderInLayer)
-        // Carte complete :
-        //   Y+1                          : interdit (toit)
-        //   Y=0  (-1,0) et (2,0)         : PAILLE UNIQUEMENT  order 3
-        //   Y=0  (-2,0) et (3,0)         : accessoires         order 3
-        //   Y-1  (-1,-1) et (2,-1)       : accessoires         order 6
-        //   Y-1  (0,-1) et (1,-1)        : fermier uniquement
-        //   Y-2  (-1,-2)(0,-2)(1,-2)     : accessoires ou fermier  order 6
-        // Zone stricte :
-        // Y=0  : X-1 et X+1 = paille uniquement / X-2 et X+2 = accessoires
-        // Y-1  : X-1, X0, X+1
-        // Y-2  : X-1, X0, X+1
         var allSlots = new List<(Vector2Int offset, int order, bool hayOnly)>
         {
-            // Y=0 directement adjacent cabane = paille uniquement
-            (new Vector2Int(-1,  0), 3, true),   // X-1 Y=0
-            (new Vector2Int( 2,  0), 3, true),   // X+1 Y=0
-            // Y=0 plus loin = accessoires
-            (new Vector2Int(-2,  0), 3, false),  // X-2 Y=0
-            (new Vector2Int( 3,  0), 3, false),  // X+2 Y=0
-            // Y-1 : X-1 et X+1 seulement (X0 = porte, fermier uniquement)
-            (new Vector2Int(-1, -1), 6, false),  // X-1 Y-1
-            (new Vector2Int( 1, -1), 6, false),  // X+1 Y-1
-            // Y-2 trois cases
-            (new Vector2Int(-1, -2), 6, false),  // X-1 Y-2
-            (new Vector2Int( 0, -2), 6, false),  // X0  Y-2
-            (new Vector2Int( 1, -2), 6, false),  // X+1 Y-2
+            (new Vector2Int(-1,  0), 3, true),
+            (new Vector2Int( 2,  0), 3, true),
+            (new Vector2Int(-2,  0), 3, false),
+            (new Vector2Int( 3,  0), 3, false),
+            (new Vector2Int(-1, -1), 6, false),
+            (new Vector2Int( 1, -1), 6, false),
+            (new Vector2Int(-1, -2), 6, false),
+            (new Vector2Int( 0, -2), 6, false),
+            (new Vector2Int( 1, -2), 6, false),
         };
         ShuffleList(allSlots);
 
         var gm = GridManager.Instance;
-
-        // Slots valides = libres, dans la grille, avec flag hayOnly
         var validSlots = new List<(Vector2Int pos, int order, bool hayOnly)>();
         foreach (var (off, ord, hayOnly) in allSlots)
         {
@@ -358,308 +251,279 @@ public class ShepherdFarmSpawner : MonoBehaviour
             validSlots.Add((pos, ord, hayOnly));
         }
 
-        // 1. Paille grande -> slot hayOnly en priorite, sinon n importe ou
-        bool hayBigPlaced = false;
+        bool barrelPlaced = false;
         foreach (var (pos, ord, hayOnly) in validSlots)
         {
-            if (!hayOnly) continue; // priorite aux slots paille uniquement
-            SpawnDecorWithOrder(_hayBigPrefab, pos, "PailleGrande", ord);
-            _farmCells.Add(pos);
-            validSlots.RemoveAll(s => s.pos == pos);
-            hayBigPlaced = true;
-            break;
-        }
-        if (!hayBigPlaced)
-        {
-            foreach (var (pos, ord, _) in validSlots)
+            if (!barrelPlaced && !hayOnly && _barrelPrefab != null)
             {
-                SpawnDecorWithOrder(_hayBigPrefab, pos, "PailleGrande", ord);
+                SpawnDecorWithOrder(_barrelPrefab, pos, "Tonneau", ord);
                 _farmCells.Add(pos);
-                validSlots.RemoveAll(s => s.pos == pos);
-                break;
+                barrelPlaced = true;
+                continue;
             }
-        }
 
-        // 2. Paille petite -> slot hayOnly restant en priorite
-        bool haySmallPlaced = false;
-        foreach (var (pos, ord, hayOnly) in validSlots)
-        {
-            if (!hayOnly) continue;
-            SpawnDecorWithOrder(_haySmallPrefab, pos, "PailleSmall", ord);
-            _farmCells.Add(pos);
-            validSlots.RemoveAll(s => s.pos == pos);
-            haySmallPlaced = true;
-            break;
-        }
-        if (!haySmallPlaced)
-        {
-            foreach (var (pos, ord, _) in validSlots)
+            if (_farmCells.Count >= 6) break;
+
+            var hayPrefab = (_rng.Next(2) == 0) ? _haySmallPrefab : _hayBigPrefab;
+            if (hayPrefab != null)
             {
-                SpawnDecorWithOrder(_haySmallPrefab, pos, "PailleSmall", ord);
+                SpawnDecorWithOrder(hayPrefab, pos,
+                    "Paille_" + (_farmCells.Count - 2), ord);
                 _farmCells.Add(pos);
-                validSlots.RemoveAll(s => s.pos == pos);
-                break;
             }
-        }
-
-        // 3. Tonneau -> slot non-hayOnly uniquement (jamais adjacent cabane)
-        foreach (var (pos, ord, hayOnly) in validSlots)
-        {
-            if (hayOnly) continue;
-            SpawnDecorWithOrder(_barrelPrefab, pos, "Tonneau", ord);
-            _farmCells.Add(pos);
-            break;
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Position du berger
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // BERGER
+    // =========================================================================
 
     private Vector2Int GetShepherdPosition(Vector2Int cabinPos)
     {
-        // Regles :
-        // - Devant la porte (0,-1) et (1,-1) : berger OK
-        // - Loin devant (0,-2) (1,-2)        : berger OK
-        // - Lateral (-1,0) (2,0)             : berger OK
-        // - Derriere (Y+1) et au dessus      : personne
-        // Fermier sur Y-1 (X-1, X0, X+1) et Y-2 (X-1, X0, X+1)
-        // Zone stricte de la ferme uniquement
         var candidates = new List<Vector2Int>
         {
-            cabinPos + new Vector2Int(-1, -1),  // X-1 Y-1
-            cabinPos + new Vector2Int( 0, -1),  // X0  Y-1
-            cabinPos + new Vector2Int( 1, -1),  // X+1 Y-1
-            cabinPos + new Vector2Int(-1, -2),  // X-1 Y-2
-            cabinPos + new Vector2Int( 0, -2),  // X0  Y-2
-            cabinPos + new Vector2Int( 1, -2),  // X+1 Y-2
+            cabinPos + new Vector2Int(0, -1),
+            cabinPos + new Vector2Int(1, -1),
+            cabinPos + new Vector2Int(-1, 0),
+            cabinPos + new Vector2Int(2, 0),
+            cabinPos + new Vector2Int(0, -2),
+            cabinPos + new Vector2Int(1, -2),
         };
         ShuffleList(candidates);
 
+        var gm = GridManager.Instance;
         foreach (var pos in candidates)
         {
-            if (!_farmCells.Contains(pos) && IsValidCell(pos,
-                GridManager.Instance.Width, GridManager.Instance.Height))
-            {
-                _farmCells.Add(pos);
-                return pos;
-            }
+            if (_farmCells.Contains(pos)) continue;
+            if (gm != null && !IsValidCell(pos, gm.Width, gm.Height)) continue;
+            return pos;
         }
-
-        // Fallback : juste en dessous de la cabane
         return cabinPos + new Vector2Int(0, -1);
     }
 
-    // -------------------------------------------------------------------------
-    // Spawn berger et moutons
-    // -------------------------------------------------------------------------
-
-    private void SpawnShepherd(Vector2Int gridPos)
+    private void SpawnShepherd(Vector2Int pos)
     {
         if (_shepherdPrefab == null) return;
-
-        Vector3 worldPos = GridToWorld(gridPos);
-        var go = Instantiate(_shepherdPrefab, worldPos, Quaternion.identity, null);
-        go.name = "Shepherd";
+        var go = Instantiate(_shepherdPrefab, GridToWorld(pos), Quaternion.identity, null);
+        go.name = "VieuxBerger";
         go.transform.localScale = Vector3.one * _shepherdScale;
 
-        var npc = go.GetComponent<NPC>();
-        npc?.Initialize(NPC.NPCType.Shepherd);
-
+        var npc = go.GetComponent<NPC>() ?? go.AddComponent<NPC>();
+        npc.Initialize(NPC.NPCType.Shepherd, 0);
         EnsureCollider(go);
 
         var wo = go.GetComponent<WorldObject>() ?? go.AddComponent<WorldObject>();
-        wo.Initialize(gridPos.x, gridPos.y);
+        wo.Initialize(pos.x, pos.y);
+
+        foreach (var sr in go.GetComponentsInChildren<SpriteRenderer>())
+        {
+            sr.sortingLayerName = "CellContent";
+            sr.sortingOrder = 5;
+        }
 
         _spawnedObjects.Add(go);
+        _farmCells.Add(pos);
     }
 
-    private void SpawnSheepNearFarm(int count, int gridWidth, int gridHeight, int indexOffset)
+    // =========================================================================
+    // MOUTONS
+    // =========================================================================
+
+    /// <summary>
+    /// Place les moutons AVANT PlaceDangers avec fallback progressif.
+    /// Passe 1 : contraintes complètes (distance ferme + entre moutons).
+    /// Passe 2 : distance ferme réduite.
+    /// Passe 3 : n'importe où dans la zone Y.
+    /// Garantit que TOUS les moutons sont placés.
+    /// </summary>
+    private void PlaceSheepBeforeEnemies(int count, int indexOffset,
+                                          GridManager gm, int yLo, int yHi)
     {
-        if (_sheepPrefab == null) return;
+        if (_sheepPrefab == null || gm == null) return;
 
         int placed = 0;
-        int attempts = 0;
-        int maxDist = Mathf.Min(_sheepMaxDistFromFarm,
-            Mathf.Min(gridWidth, gridHeight) - _edgeMargin);
 
-        // Liste des positions deja placees pour eviter les moutons trop proches
-        var placedPositions = new List<Vector2Int>();
+        // Passe 1 : contraintes normales
+        placed += TryPlaceSheep(count - placed, indexOffset + placed, gm, yLo, yHi,
+            _sheepMinDistFromFarm, _sheepMaxDistFromFarm, _sheepMinDistBetween);
 
-        while (placed < count && attempts < _sheepPlacementMaxTries)
+        // Passe 2 : distance ferme réduite (min 3)
+        if (placed < count)
+            placed += TryPlaceSheep(count - placed, indexOffset + placed, gm, yLo, yHi,
+                3, _sheepMaxDistFromFarm + 4, Mathf.Max(2, _sheepMinDistBetween - 1));
+
+        // Passe 3 : n'importe où dans la zone
+        if (placed < count)
+            placed += TryPlaceSheep(count - placed, indexOffset + placed, gm, yLo, yHi,
+                1, 99, 2);
+
+        Debug.Log($"[ShepherdFarm] ✅ Moutons: {placed}/{count} offset={indexOffset} " +
+                  $"Y=[{yLo},{yHi}]");
+    }
+
+    private int TryPlaceSheep(int count, int indexOffset, GridManager gm,
+                               int yLo, int yHi,
+                               int minDistFarm, int maxDistFarm, int minDistBetween)
+    {
+        int placed = 0;
+
+        for (int attempt = 0; attempt < 400 && placed < count; attempt++)
         {
-            attempts++;
+            int sx = _rng.Next(_edgeMargin, gm.Width - _edgeMargin);
+            int sy = _rng.Next(yLo, yHi + 1);
 
-            int rx = _rng.Next(_edgeMargin, gridWidth - _edgeMargin);
-            int ry = _rng.Next(_edgeMargin, gridHeight - _edgeMargin);
-            var pos = new Vector2Int(rx, ry);
-
-            // 1. Distance depuis la ferme
             int distFarm = Mathf.Max(
-                Mathf.Abs(pos.x - _farmOrigin.x),
-                Mathf.Abs(pos.y - _farmOrigin.y));
-            if (distFarm < _sheepMinDistFromFarm || distFarm > maxDist) continue;
+                Mathf.Abs(sx - _farmOrigin.x),
+                Mathf.Abs(sy - _farmOrigin.y));
+            if (distFarm < minDistFarm || distFarm > maxDistFarm) continue;
 
-            // 2. Pas trop pres d'un autre mouton (niveau 1 ET niveau 2 confondus)
-            bool tooCloseSheep = false;
-            foreach (var other in _allSheepPositions)
-            {
-                int d = Mathf.Max(Mathf.Abs(pos.x - other.x), Mathf.Abs(pos.y - other.y));
-                if (d < _sheepMinDistBetween) { tooCloseSheep = true; break; }
-            }
-            if (tooCloseSheep) continue;
+            var pos = new Vector2Int(sx, sy);
+            if (_farmCells != null && _farmCells.Contains(pos)) continue;
 
-            if (!IsValidCell(pos, gridWidth, gridHeight, true)) continue;
-            if (_farmCells.Contains(pos)) continue;
+            bool tooClose = false;
+            foreach (var sp in _allSheepPositions)
+                if (Mathf.Max(Mathf.Abs(sp.x - sx), Mathf.Abs(sp.y - sy))
+                    < minDistBetween)
+                { tooClose = true; break; }
+            if (tooClose) continue;
 
-            // 3. Pas trop pres d un ennemi (verifie les cases voisines de la grille)
-            bool tooCloseEnemy = false;
-            var gm = GridManager.Instance;
-            if (gm != null)
-            {
-                for (int ex = -_sheepEnemySafeRadius; ex <= _sheepEnemySafeRadius && !tooCloseEnemy; ex++)
-                    for (int ey = -_sheepEnemySafeRadius; ey <= _sheepEnemySafeRadius && !tooCloseEnemy; ey++)
-                    {
-                        var neighbor = new Vector2Int(pos.x + ex, pos.y + ey);
-                        if (!MinesweeperLogic.IsInBounds(neighbor.x, neighbor.y, gridWidth, gridHeight)) continue;
-                        var neighborCell = gm.GetCell(neighbor.x, neighbor.y);
-                        if (neighborCell != null && neighborCell.IsEnemy) tooCloseEnemy = true;
-                    }
-            }
-            if (tooCloseEnemy) continue;
+            var cell = gm.GetCell(sx, sy);
+            if (cell == null) continue;
+            if (cell.IsMountainReserved) continue;
 
-            Vector3 worldPos = GridToWorld(pos);
-            var go = Instantiate(_sheepPrefab, worldPos, Quaternion.identity, null);
+            var go = Instantiate(_sheepPrefab, GridToWorld(pos),
+                Quaternion.identity, null);
             go.name = "Sheep_" + (placed + indexOffset);
             go.transform.localScale = Vector3.one * _sheepScale;
 
             var npc = go.GetComponent<NPC>();
-            npc?.Initialize(NPC.NPCType.Sheep, placed + indexOffset);
-
+            if (npc != null) npc.Initialize(NPC.NPCType.Sheep, placed + indexOffset);
             EnsureCollider(go);
 
             var wo = go.GetComponent<WorldObject>() ?? go.AddComponent<WorldObject>();
-            wo.Initialize(pos.x, pos.y);
+            wo.Initialize(sx, sy);
 
-            GridManager.Instance?.ReserveCircle(pos.x, pos.y, _sheepProtectionRadius);
-
+            gm.ReserveCircle(sx, sy, _sheepProtectionRadius);
             _spawnedObjects.Add(go);
-            _farmCells.Add(pos);
-            placedPositions.Add(pos);
             _allSheepPositions.Add(pos);
             placed++;
+
+            Debug.Log($"[ShepherdFarm] Sheep_{placed - 1 + indexOffset} ({sx},{sy}) " +
+                      $"dist={distFarm} Y=[{yLo},{yHi}]");
         }
 
-        if (placed < count)
-            Debug.LogWarning("[ShepherdFarm] Seulement " + placed + "/" + count
-                + " moutons places apres " + attempts + " tentatives."
-                + " Augmente SheepPlacementMaxTries ou reduis les contraintes.");
+        return placed;
     }
 
-    private void SpawnLevel2Sheep(int gridWidth, int gridHeight)
+    /// <summary>
+    /// Place les moutons LIBREMENT dans un chunk (batch 2).
+    /// Pas de contrainte de distance à la ferme — juste dans [yLo, yHi].
+    /// </summary>
+    private void PlaceSheepFree(int count, int indexOffset,
+                                 GridManager gm, int yLo, int yHi)
     {
-        if (QuestManager.Instance == null)
+        if (_sheepPrefab == null || gm == null) return;
+
+        int placed = 0;
+
+        for (int attempt = 0; attempt < 500 && placed < count; attempt++)
         {
-            Debug.LogError("[ShepherdFarm] QuestManager null - moutons niv2 annules");
-            return;
+            int sx = _rng.Next(_edgeMargin, gm.Width - _edgeMargin);
+            int sy = _rng.Next(yLo, yHi);
+
+            var pos = new Vector2Int(sx, sy);
+
+            bool tooClose = false;
+            foreach (var sp in _allSheepPositions)
+                if (Mathf.Max(Mathf.Abs(sp.x - sx), Mathf.Abs(sp.y - sy))
+                    < _sheepMinDistBetween)
+                { tooClose = true; break; }
+            if (tooClose) continue;
+
+            var cell = gm.GetCell(sx, sy);
+            if (cell == null) continue;
+            if (cell.IsMountainReserved) continue;
+
+            var go = Instantiate(_sheepPrefab, GridToWorld(pos),
+                Quaternion.identity, null);
+            go.name = "Sheep_" + (placed + indexOffset);
+            go.transform.localScale = Vector3.one * _sheepScale;
+
+            var npc = go.GetComponent<NPC>();
+            if (npc != null) npc.Initialize(NPC.NPCType.Sheep, placed + indexOffset);
+            EnsureCollider(go);
+
+            var wo = go.GetComponent<WorldObject>() ?? go.AddComponent<WorldObject>();
+            wo.Initialize(sx, sy);
+
+            gm.ReserveCircle(sx, sy, _sheepProtectionRadius);
+            _spawnedObjects.Add(go);
+            _allSheepPositions.Add(pos);
+            placed++;
+
+            Debug.Log($"[ShepherdFarm] Sheep_{placed - 1 + indexOffset} placé ({sx},{sy}) Y=[{yLo},{yHi}]");
         }
 
-        int count = QuestManager.Instance.SheepOnLevel2;
-        int indexOffset = QuestManager.Instance.SheepOnLevel1;
-
-
-        if (count <= 0)
-        {
-            Debug.LogWarning("[ShepherdFarm] count <= 0, aucun mouton niv2 a spawner");
-            return;
-        }
-
-        var gm = GridManager.Instance;
-        if (gm == null)
-        {
-            Debug.LogError("[ShepherdFarm] GridManager null");
-            return;
-        }
-
-        // Utiliser toute la grille pour maximiser les chances
-        int ext = GameManager.Instance?.GridHeightExtensionPerLevel ?? 16;
-        int yMin = Mathf.Max(0, gridHeight - ext);
-        if (gridHeight - yMin - _edgeMargin * 2 < 3) yMin = 0;
-
-
-        SpawnSheepInZone(count, gridWidth, gridHeight, yMin, indexOffset);
+        Debug.Log($"[ShepherdFarm] ✅ Batch 2: {placed}/{count}");
     }
 
     private void SpawnSheepInZone(int count, int gridWidth, int gridHeight,
-        int yMin, int indexOffset)
+                                  int yMin, int indexOffset)
     {
-        if (_sheepPrefab == null)
-        {
-            Debug.LogError("[ShepherdFarm] _sheepPrefab null !");
-            return;
-        }
-
-        int ryMin = Mathf.Max(_edgeMargin, yMin);
-        int ryMax = gridHeight - _edgeMargin;
-        if (ryMin >= ryMax) { ryMin = _edgeMargin; ryMax = gridHeight - _edgeMargin; }
+        if (_sheepPrefab == null) return;
 
         int placed = 0;
-        int attempts = 0;
-        // Essais progressifs : d abord avec toutes les contraintes
-        // puis on relache progressivement si echec
-        int maxTries = _sheepPlacementMaxTries * 3;
+        int yMax = gridHeight - _edgeMargin;
 
-        while (placed < count && attempts < maxTries)
+        for (int attempt = 0; attempt < _sheepPlacementMaxTries && placed < count; attempt++)
         {
-            attempts++;
+            int sx = _rng.Next(_edgeMargin, gridWidth - _edgeMargin);
+            int sy = _rng.Next(Mathf.Max(yMin, _edgeMargin), yMax);
+            var pos = new Vector2Int(sx, sy);
 
-            int rx = _rng.Next(_edgeMargin, gridWidth - _edgeMargin);
-            int ry = _rng.Next(ryMin, ryMax);
-            var pos = new Vector2Int(rx, ry);
+            if (_farmCells != null && _farmCells.Contains(pos)) continue;
 
-            if (!IsValidCell(pos, gridWidth, gridHeight, true)) continue;
-            if (_farmCells.Contains(pos)) continue;
+            int distFarm = Mathf.Max(
+                Mathf.Abs(pos.x - _farmOrigin.x),
+                Mathf.Abs(pos.y - _farmOrigin.y));
+            if (distFarm < _sheepMinDistFromFarm) continue;
 
-            // Distance minimum entre moutons
-            // On relache cette contrainte apres la moitie des essais
-            bool checkDist = attempts < maxTries / 2;
-            if (checkDist)
+            bool tooClose = false;
+            foreach (var other in _allSheepPositions)
             {
-                bool tooClose = false;
-                foreach (var other in _allSheepPositions)
-                {
-                    int d = Mathf.Max(Mathf.Abs(pos.x - other.x),
-                                      Mathf.Abs(pos.y - other.y));
-                    if (d < _sheepMinDistBetween) { tooClose = true; break; }
-                }
-                if (tooClose) continue;
+                int d = Mathf.Max(Mathf.Abs(pos.x - other.x), Mathf.Abs(pos.y - other.y));
+                if (d < _sheepMinDistBetween) { tooClose = true; break; }
             }
+            if (tooClose) continue;
 
-            // Enemy safe radius - toujours respecte
+            // Vérifier bounds + montagne (PAS reserved — les moutons vont dans la zone protégée)
+            if (!IsValidCell(pos, gridWidth, gridHeight, false)) continue;
+
+            // Vérifier que la case n'a pas d'ennemi
+            var cellCheck = GridManager.Instance?.GetCell(pos.x, pos.y);
+            if (cellCheck != null && cellCheck.IsDangerous) continue;
+
             bool nearEnemy = false;
-            var gm2 = GridManager.Instance;
-            if (gm2 != null)
+            var gm = GridManager.Instance;
+            if (gm != null)
             {
                 for (int ex = -_sheepEnemySafeRadius; ex <= _sheepEnemySafeRadius && !nearEnemy; ex++)
                     for (int ey = -_sheepEnemySafeRadius; ey <= _sheepEnemySafeRadius && !nearEnemy; ey++)
                     {
                         var n = new Vector2Int(pos.x + ex, pos.y + ey);
                         if (!MinesweeperLogic.IsInBounds(n.x, n.y, gridWidth, gridHeight)) continue;
-                        var nc = gm2.GetCell(n.x, n.y);
+                        var nc = gm.GetCell(n.x, n.y);
                         if (nc != null && nc.IsEnemy) nearEnemy = true;
                     }
             }
             if (nearEnemy) continue;
 
-            // Placer le mouton
-            Vector3 worldPos = GridToWorld(pos);
-            var go = Instantiate(_sheepPrefab, worldPos, Quaternion.identity, null);
+            var go = Instantiate(_sheepPrefab, GridToWorld(pos), Quaternion.identity, null);
             go.name = "Sheep_" + (placed + indexOffset);
             go.transform.localScale = Vector3.one * _sheepScale;
 
             var npc = go.GetComponent<NPC>();
-            npc?.Initialize(NPC.NPCType.Sheep, placed + indexOffset);
-
+            if (npc != null) npc.Initialize(NPC.NPCType.Sheep, placed + indexOffset);
             EnsureCollider(go);
 
             var wo = go.GetComponent<WorldObject>() ?? go.AddComponent<WorldObject>();
@@ -668,272 +532,153 @@ public class ShepherdFarmSpawner : MonoBehaviour
             GridManager.Instance?.ReserveCircle(pos.x, pos.y, _sheepProtectionRadius);
 
             _spawnedObjects.Add(go);
-            _farmCells.Add(pos);
             _allSheepPositions.Add(pos);
             placed++;
         }
 
-        if (placed < count)
-            Debug.LogWarning("[ShepherdFarm] Seulement " + placed + "/" + count
-                + " moutons places apres " + attempts + " tentatives.");
+        Debug.Log($"[ShepherdFarm] SheepInZone: {placed}/{count} Y=[{yMin},{yMax}]");
     }
 
+    // =========================================================================
+    // FIND FARM ZONE
+    // =========================================================================
 
-    // -------------------------------------------------------------------------
-    // Recherche de zone libre pour la ferme
-    // -------------------------------------------------------------------------
-
-    /// <summary>
-    /// Choisit une position pour la ferme selon les biais Inspector :
-    ///   cornerBias = probabilite d'atterrir dans un coin
-    ///   edgeBias   = probabilite d'atterrir sur un bord
-    ///   reste      = centre de la grille
-    /// </summary>
-    private Vector2Int? FindFarmZone(int gridWidth, int gridHeight)
+    private Vector2Int? FindFarmZone(int gridWidth, int gridHeight,
+                                      int constrainYMin = -1,
+                                      int constrainYMax = -1)
     {
         int minX = _edgeMargin;
         int maxX = gridWidth - _edgeMargin - _minFarmZoneSize;
-        int minY = _edgeMargin;
-        int maxY = gridHeight - _edgeMargin - _minFarmZoneSize;
+        int minY = (constrainYMin >= 0) ? constrainYMin + _edgeMargin : _edgeMargin;
+        int maxY = (constrainYMax > 0)
+            ? constrainYMax - _edgeMargin - _minFarmZoneSize
+            : gridHeight - _edgeMargin - _minFarmZoneSize;
 
         if (maxX <= minX || maxY <= minY)
-            return new Vector2Int(gridWidth / 2 - 2, gridHeight / 4);
+            return new Vector2Int(gridWidth / 2 - 2, minY + 2);
 
-        // Tailles des zones en cases
         int cornerW = Mathf.Max(1, Mathf.RoundToInt((maxX - minX) * _cornerZoneRatio));
         int cornerH = Mathf.Max(1, Mathf.RoundToInt((maxY - minY) * _cornerZoneRatio));
         int edgeW = Mathf.Max(1, Mathf.RoundToInt((maxX - minX) * _edgeZoneRatio));
         int edgeH = Mathf.Max(1, Mathf.RoundToInt((maxY - minY) * _edgeZoneRatio));
 
-        // Tirage de la zone selon les probabilites
         float roll = (float)_rng.NextDouble();
-        float total = _cornerBias + _edgeBias;
-        // Clamp pour eviter que corner + edge > 1
-        float cornerP = _cornerBias;
-        float edgeP = Mathf.Min(_edgeBias, 1f - cornerP);
-
         int x, y;
-        string zone;
 
-        if (roll < cornerP)
+        if (roll < _cornerBias)
         {
-            // COIN : choisir un des 4 coins aleatoirement
-            zone = "COIN";
             int corner = _rng.Next(4);
-            x = (corner == 0 || corner == 2)
-                ? _rng.Next(minX, minX + cornerW)
-                : _rng.Next(maxX - cornerW, maxX);
-            y = (corner == 0 || corner == 1)
-                ? _rng.Next(minY, minY + cornerH)
-                : _rng.Next(maxY - cornerH, maxY);
+            x = (corner == 0 || corner == 2) ? _rng.Next(minX, minX + cornerW) : _rng.Next(maxX - cornerW, maxX);
+            y = (corner == 0 || corner == 1) ? _rng.Next(minY, minY + cornerH) : _rng.Next(maxY - cornerH, maxY);
         }
-        else if (roll < cornerP + edgeP)
+        else if (roll < _cornerBias + _edgeBias)
         {
-            // BORD : choisir un des 4 bords aleatoirement
-            zone = "BORD";
             int side = _rng.Next(4);
-            if (side == 0) { x = _rng.Next(minX, maxX); y = _rng.Next(minY, minY + edgeH); }
-            else if (side == 1) { x = _rng.Next(minX, maxX); y = _rng.Next(maxY - edgeH, maxY); }
-            else if (side == 2) { x = _rng.Next(minX, minX + edgeW); y = _rng.Next(minY, maxY); }
-            else { x = _rng.Next(maxX - edgeW, maxX); y = _rng.Next(minY, maxY); }
+            switch (side)
+            {
+                case 0: x = _rng.Next(minX, maxX); y = _rng.Next(minY, minY + edgeH); break;
+                case 1: x = _rng.Next(minX, maxX); y = _rng.Next(maxY - edgeH, maxY); break;
+                case 2: x = _rng.Next(minX, minX + edgeW); y = _rng.Next(minY, maxY); break;
+                default: x = _rng.Next(maxX - edgeW, maxX); y = _rng.Next(minY, maxY); break;
+            }
         }
         else
         {
-            // CENTRE : zone centrale excentree des bords
-            zone = "CENTRE";
             x = _rng.Next(minX + cornerW, maxX - cornerW);
             y = _rng.Next(minY + cornerH, maxY - cornerH);
         }
 
-        // Clamp securite
         x = Mathf.Clamp(x, minX, maxX);
         y = Mathf.Clamp(y, minY, maxY);
-
-
         return new Vector2Int(x, y);
     }
 
-    /// <summary>
-    /// Verifie que la zone pour la ferme est libre :
-    /// - Dans les limites de la grille
-    /// - Pas d'arbres (cases foret cachees) dans le rayon buffer
-    /// Cela garantit que la ferme est dans un espace ouvert et paisible.
-    /// Note : les dangers (ennemis) sont places apres le 1er clic,
-    /// donc on verifie seulement le biome pour l'instant.
-    /// </summary>
-    private bool IsZoneClearForFarm(
-        Vector2Int origin, int farmSize, int buffer, int gridWidth, int gridHeight)
-    {
-        int checkSize = farmSize + buffer * 2;
-        int startX = origin.x - buffer;
-        int startY = origin.y - buffer;
+    // =========================================================================
+    // DOOR
+    // =========================================================================
 
-        for (int dx = 0; dx < checkSize; dx++)
-        {
-            for (int dy = 0; dy < checkSize; dy++)
-            {
-                int nx = startX + dx;
-                int ny = startY + dy;
-
-                // Hors grille = invalide
-                if (!MinesweeperLogic.IsInBounds(nx, ny, gridWidth, gridHeight))
-                    return false;
-
-                // On verifie le biome de la case : on veut eviter les forets denses
-                // Les cases foret non revelees = arbres = on les evite dans le buffer
-                var cell = GridManager.Instance?.GetCell(nx, ny);
-                if (cell == null) continue;
-
-                // Dans la zone coeur de la ferme (pas le buffer) : aucun arbre
-                bool inFarmCore = (dx >= buffer && dx < buffer + farmSize &&
-                                   dy >= buffer && dy < buffer + farmSize);
-                if (inFarmCore && cell.Biome == BiomeType.Forest)
-                    return false;
-            }
-        }
-        return true;
-    }
-
-    // -------------------------------------------------------------------------
-    // Spawn decor generique
-    // -------------------------------------------------------------------------
-
-    private void SpawnDecor(GameObject prefab, Vector2Int gridPos, string label)
-    {
-        SpawnDecorWithOrder(prefab, gridPos, label, orderInLayer: 5);
-    }
-
-    private void SpawnDecorWithOrder(
-        GameObject prefab, Vector2Int gridPos, string label, int orderInLayer)
-    {
-        if (prefab == null)
-        {
-            Debug.LogWarning("[ShepherdFarm] Prefab manquant pour : " + label);
-            return;
-        }
-
-        Vector3 worldPos = GridToWorld(gridPos);
-        var go = Instantiate(prefab, worldPos, Quaternion.identity, null);
-        go.name = label;
-
-        // Scale selon le type
-        if (label == "Cabane")
-            go.transform.localScale = Vector3.one * _cabinScale;
-        else
-            go.transform.localScale = Vector3.one * _accessoryScale;
-
-        // Appliquer le Sorting Layer et Order
-        var sr = go.GetComponent<SpriteRenderer>();
-        if (sr != null)
-        {
-            sr.sortingLayerName = "CellContent";
-            sr.sortingOrder = orderInLayer;
-        }
-        // Aussi sur les enfants si sprite sur enfant
-        foreach (var childSr in go.GetComponentsInChildren<SpriteRenderer>())
-        {
-            childSr.sortingLayerName = "CellContent";
-            childSr.sortingOrder = orderInLayer;
-        }
-
-        var wo = go.GetComponent<WorldObject>() ?? go.AddComponent<WorldObject>();
-        wo.Initialize(gridPos.x, gridPos.y);
-
-        _spawnedObjects.Add(go);
-    }
-
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
-
-    private Vector3 GridToWorld(Vector2Int gridPos)
-    {
-        float step = _cellStep > 0 ? _cellStep : 1.05f;
-        return new Vector3(gridPos.x * step, gridPos.y * step, 0f);
-    }
-
-    private bool IsValidCell(Vector2Int pos, int gridWidth, int gridHeight,
-        bool checkReserved = false)
-    {
-        if (!MinesweeperLogic.IsInBounds(pos.x, pos.y, gridWidth, gridHeight)) return false;
-        // checkReserved uniquement pour les moutons (pas pour les accessoires de la ferme)
-        if (checkReserved && GridManager.Instance != null
-            && GridManager.Instance.IsCellReserved(pos.x, pos.y)) return false;
-        return true;
-    }
-
-    private void EnsureCollider(GameObject go)
-    {
-        if (go.GetComponent<Collider2D>() == null)
-        {
-            var col = go.AddComponent<BoxCollider2D>();
-            col.size = Vector2.one * 0.9f;
-        }
-    }
-
-    private void ShuffleList<T>(List<T> list)
-    {
-        int n = list.Count;
-        while (n > 1)
-        {
-            n--;
-            int k = _rng.Next(n + 1);
-            (list[k], list[n]) = (list[n], list[k]);
-        }
-    }
-
-    private void ClearSpawned()
-    {
-        foreach (var go in _spawnedObjects)
-        {
-            if (go == null) continue;
-            // Ne pas detruire les moutons qui rejoignent la ferme
-            var sheep = go.GetComponent<SheepBehaviour>();
-            if (sheep != null && sheep.IsReturningToFarm) continue;
-            Destroy(go);
-        }
-        // Garder les moutons en retour dans la liste
-        _spawnedObjects.RemoveAll(go =>
-            go == null ||
-            go.GetComponent<SheepBehaviour>() == null ||
-            !go.GetComponent<SheepBehaviour>().IsReturningToFarm);
-    }
-
-    // ── Porte de la cabane ────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Cherche le GO "Cabane" dans les objets spawnés, lui ajoute un
-    /// BuildingDoorTrigger et BoxCollider2D, et enregistre dans IndoorManager.
-    /// </summary>
     private void AttachCabinDoor(Vector2Int cabinPos, Vector2Int doorPos)
     {
-        // Retrouver le GO de la cabane
         GameObject cabinGO = null;
         foreach (var go in _spawnedObjects)
         {
             if (go != null && go.name == "Cabane") { cabinGO = go; break; }
         }
+        if (cabinGO == null) return;
 
-        if (cabinGO == null)
-        {
-            Debug.LogWarning("[ShepherdFarm] GO Cabane introuvable pour attacher la porte.");
-            return;
-        }
-
-        // Ajouter collider si absent
         if (cabinGO.GetComponent<BoxCollider2D>() == null)
             cabinGO.AddComponent<BoxCollider2D>();
 
-        // Ajouter le trigger de porte
         if (cabinGO.GetComponent<BuildingDoorTrigger>() == null)
         {
             var trigger = cabinGO.AddComponent<BuildingDoorTrigger>();
             trigger.Initialize(doorPos.x, doorPos.y, "Cabane du Berger");
         }
 
-        // Enregistrer dans IndoorManager
         IndoorManager.Instance?.RegisterBuilding(doorPos.x, doorPos.y, "Cabane du Berger");
+    }
 
-        Debug.Log($"[ShepherdFarm] Porte cabane attachée → doorPos=({doorPos.x},{doorPos.y})");
+    // =========================================================================
+    // HELPERS
+    // =========================================================================
+
+    private bool IsValidCell(Vector2Int pos, int w, int h, bool checkDanger = false)
+    {
+        if (!MinesweeperLogic.IsInBounds(pos.x, pos.y, w, h)) return false;
+        var gm = GridManager.Instance;
+        if (gm == null) return true;
+        var cell = gm.GetCell(pos.x, pos.y);
+        if (cell == null) return false;
+        if (cell.IsMountainReserved) return false;
+        if (checkDanger && cell.IsDangerous) return false;
+        return true;
+    }
+
+    private Vector3 GridToWorld(Vector2Int pos)
+    {
+        float step = _cellStep > 0 ? _cellStep : 1.05f;
+        return new Vector3(pos.x * step, pos.y * step, 0f);
+    }
+
+    private void SpawnDecorWithOrder(GameObject prefab, Vector2Int pos, string label, int orderInLayer)
+    {
+        if (prefab == null) return;
+        var go = Instantiate(prefab, GridToWorld(pos), Quaternion.identity, null);
+        go.name = label;
+        go.transform.localScale = (label == "Cabane")
+            ? Vector3.one * _cabinScale
+            : Vector3.one * _accessoryScale;
+
+        foreach (var sr in go.GetComponentsInChildren<SpriteRenderer>())
+        {
+            sr.sortingLayerName = "CellContent";
+            sr.sortingOrder = orderInLayer;
+        }
+
+        var wo = go.GetComponent<WorldObject>() ?? go.AddComponent<WorldObject>();
+        wo.Initialize(pos.x, pos.y);
+
+        _spawnedObjects.Add(go);
+    }
+
+    private void EnsureCollider(GameObject go)
+    {
+        if (go.GetComponent<Collider2D>() == null)
+        {
+            var box = go.AddComponent<BoxCollider2D>();
+            box.size = Vector2.one * 0.9f;
+        }
+    }
+
+    private void ClearSpawned()
+    {
+        foreach (var go in _spawnedObjects) if (go != null) Destroy(go);
+        _spawnedObjects.Clear();
+    }
+
+    private void ShuffleList<T>(List<T> list)
+    {
+        int n = list.Count;
+        while (n > 1) { n--; int k = _rng.Next(n + 1); (list[k], list[n]) = (list[n], list[k]); }
     }
 }

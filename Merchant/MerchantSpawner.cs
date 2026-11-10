@@ -1,10 +1,10 @@
-using UnityEngine;
+﻿using UnityEngine;
 using System.Collections.Generic;
 
 /// <summary>
-/// MerchantSpawner - Place le marchand ambulant Aldric
-/// a la frontiere niveau 2/3 (cases hautes du niveau 2 ou basses du niveau 3).
-/// Meme logique de placement que ShepherdFarmSpawner.
+/// MerchantSpawner - Place le marchand ambulant Aldric.
+/// _spawnAtLevel contrôle le level de spawn (Inspector).
+/// Réserve ET spawne au MÊME level.
 /// </summary>
 public class MerchantSpawner : MonoBehaviour
 {
@@ -12,30 +12,20 @@ public class MerchantSpawner : MonoBehaviour
 
     [Header("=== Prefabs ===")]
     [SerializeField] private GameObject _merchantPrefab;
-    [SerializeField] private GameObject _cal�chePrefab;
+    [SerializeField] private GameObject _calèchePrefab;
     [SerializeField] private GameObject _marchandisePrefab;
 
     [Header("=== Protection ===")]
-    [Tooltip("Rayon sans danger autour du marchand")]
     [SerializeField, Range(1f, 8f)] private float _protectionRadius = 3f;
 
     [Header("=== Placement ===")]
-    [Tooltip("Marge depuis les bords de la grille")]
     [SerializeField, Range(1, 5)] private int _edgeMargin = 3;
-    [Tooltip("Cases de marge depuis la frontiere niveau 2/3")]
     [SerializeField, Range(2, 10)] private int _borderRange = 8;
-    
 
     [Header("=== Probabilites de Zone ===")]
-    [Tooltip("Chance que le marchand soit dans un coin de la zone")]
     [SerializeField, Range(0f, 1f)] private float _cornerBias = 0.35f;
-    [Tooltip("Chance que le marchand soit sur un bord de la zone")]
     [SerializeField, Range(0f, 1f)] private float _edgeBias = 0.35f;
-    // Reste = centre de la zone
-
-    [Tooltip("Taille de la zone coin en ratio de la largeur")]
     [SerializeField, Range(0.1f, 0.5f)] private float _cornerZoneRatio = 0.30f;
-    [Tooltip("Taille de la zone bord en ratio de la largeur")]
     [SerializeField, Range(0.1f, 0.4f)] private float _edgeZoneRatio = 0.20f;
 
     [Header("=== Tailles ===")]
@@ -46,14 +36,16 @@ public class MerchantSpawner : MonoBehaviour
     [Header("=== Graine ===")]
     [SerializeField] private int _seed = 0;
 
+    [Header("=== Level de spawn ===")]
+    [Tooltip("Level d'extension où le marchand apparaît. Avec prologue : 4")]
+    [SerializeField] private int _spawnAtLevel = 4;
+
     private System.Random _rng;
     private float _cellStep;
     private Vector2Int _origin;
     private List<Vector2Int> _occupiedCells = new();
     private List<GameObject> _spawnedObjects = new();
     private bool _spawned = false;
-
-    // -------------------------------------------------------------------------
 
     private void Awake()
     {
@@ -63,8 +55,6 @@ public class MerchantSpawner : MonoBehaviour
 
     private void OnEnable()
     {
-        EventBus.Subscribe<OnGridDataReady>(OnGridDataReady);
-        EventBus.Subscribe<OnGridGenerated>(OnGridGenerated);
         EventBus.Subscribe<OnGridExtending>(OnGridExtendingEvt);
         EventBus.Subscribe<OnGridExtended>(OnGridExtended);
         EventBus.Subscribe<OnRunStarted>(OnRunStarted);
@@ -72,8 +62,6 @@ public class MerchantSpawner : MonoBehaviour
 
     private void OnDisable()
     {
-        EventBus.Unsubscribe<OnGridDataReady>(OnGridDataReady);
-        EventBus.Unsubscribe<OnGridGenerated>(OnGridGenerated);
         EventBus.Unsubscribe<OnGridExtending>(OnGridExtendingEvt);
         EventBus.Unsubscribe<OnGridExtended>(OnGridExtended);
         EventBus.Unsubscribe<OnRunStarted>(OnRunStarted);
@@ -87,39 +75,20 @@ public class MerchantSpawner : MonoBehaviour
         _occupiedCells = new List<Vector2Int>();
     }
 
-    // -------------------------------------------------------------------------
-    // Le marchand apparait quand la grille s'etend au niveau 3
-    // -------------------------------------------------------------------------
+    // ── Réserve AVANT PlaceDangers ───────────────────────────────────────────
 
-    private void OnGridDataReady(OnGridDataReady evt) { }
-
-    private void OnGridGenerated(OnGridGenerated evt)
-    {
-        _cellStep = GridManager.Instance?.CellStep ?? 1.05f;
-    }
-
-    /// <summary>
-    /// Recu AVANT le placement des dangers de la nouvelle zone.
-    /// On calcule la position du marchand et on reserve le cercle ici.
-    /// </summary>
     private void OnGridExtendingEvt(OnGridExtending evt)
     {
-        if (_spawned) return;
-        if (evt.Level < 3) return;
+        if (_spawned || evt.Level != _spawnAtLevel) return;
 
         _cellStep = GridManager.Instance?.CellStep ?? 1.05f;
 
-        // Calculer la position
-        // Aldric se place dans les premieres cases du niveau 3
-        // (juste au dessus de la frontiere = dans la zone des nouveaux dangers)
         int borderY = evt.OldHeight;
         int yMin = borderY + _edgeMargin;
         int yMax = Mathf.Min(evt.NewHeight - _edgeMargin, borderY + _borderRange);
 
-        // Tirage selon biais coin/bord/centre sur l'axe X
         int minX = _edgeMargin;
         int maxX = evt.Width - _edgeMargin - 2;
-
         int cornerW = Mathf.Max(1, Mathf.RoundToInt((maxX - minX) * _cornerZoneRatio));
         int edgeW = Mathf.Max(1, Mathf.RoundToInt((maxX - minX) * _edgeZoneRatio));
 
@@ -154,58 +123,46 @@ public class MerchantSpawner : MonoBehaviour
         int y = _rng.Next(yMin, yMax);
         _origin = new Vector2Int(x, y);
 
-        Debug.Log("<color=#FFD700>[MerchantSpawner]</color> Zone=" + zone
-            + " pos=(" + x + "," + y + ") roll=" + roll.ToString("F2"));
+        Debug.Log($"[MerchantSpawner] Zone={zone} pos={_origin} level={evt.Level}");
 
-        // Reserver le cercle MAINTENANT avant que les dangers soient places
-        // On etend le rayon vers le haut pour couvrir les cases Y+1 a Y+radius
         var gm = GridManager.Instance;
         if (gm != null)
         {
-            // Cercle principal sur la position d'Aldric
             gm.ReserveCircle(_origin.x, _origin.y, _protectionRadius);
-            // Cercles supplementaires vers le haut pour couvrir la zone des nouveaux dangers
             for (int dy = 1; dy <= (int)_protectionRadius; dy++)
                 gm.ReserveCircle(_origin.x, _origin.y + dy, _protectionRadius - dy + 1);
-
-            Debug.Log("<color=#FFD700>[MerchantSpawner]</color> Zone reservee pour Aldric en "
-                + _origin + " rayon=" + _protectionRadius
-                + " | ReservedCells=" + gm.ReservedCount);
         }
     }
 
+    // ── Spawn APRÈS extension ────────────────────────────────────────────────
+
     private void OnGridExtended(OnGridExtended evt)
     {
-        if (_spawned) return;
-        if (evt.Level < 3) return;
+        if (_spawned || evt.Level != _spawnAtLevel) return;
 
         _cellStep = GridManager.Instance?.CellStep ?? 1.05f;
         var gm = GridManager.Instance;
         if (gm == null) return;
 
-        // _origin est deja calcule dans OnGridExtendingEvt
         SpawnMerchantAtOrigin(gm.Width, gm.Height);
     }
 
-    // -------------------------------------------------------------------------
-    // Placement
-    // -------------------------------------------------------------------------
+    // ── Placement ────────────────────────────────────────────────────────────
 
     private void SpawnMerchantAtOrigin(int gridWidth, int gridHeight)
     {
-        // _origin est deja calcule et reserve dans OnGridExtendingEvt
-        Debug.Log("<color=#FFD700>[MerchantSpawner]</color> Spawn Aldric en " + _origin);
-        SpawnCal�che();
+        Debug.Log($"[MerchantSpawner] Spawn Aldric en {_origin}");
+        SpawnCalèche();
         SpawnAccessoires();
         SpawnMerchantNPC();
         _spawned = true;
     }
 
-    private void SpawnCal�che()
+    private void SpawnCalèche()
     {
-        if (_cal�chePrefab == null) return;
+        if (_calèchePrefab == null) return;
         var pos = new Vector2Int(_origin.x, _origin.y);
-        SpawnObject(_cal�chePrefab, pos, "Calecheche", _calecheScale, 4);
+        SpawnObject(_calèchePrefab, pos, "Calecheche", _calecheScale, 4);
         _occupiedCells.Add(pos);
         _occupiedCells.Add(pos + Vector2Int.right);
     }
@@ -214,15 +171,12 @@ public class MerchantSpawner : MonoBehaviour
     {
         if (_marchandisePrefab == null) return;
 
-        // Slots proches de la cal�che uniquement
-        // Pas devant Aldric (Y-1), pas trop loin
         var slots = new List<(Vector2Int offset, int order)>
         {
-            (new Vector2Int(-1,  0), 3),  // lateral gauche direct
-            (new Vector2Int( 2,  0), 3),  // lateral droite direct
+            (new Vector2Int(-1,  0), 3),
+            (new Vector2Int( 2,  0), 3),
         };
 
-        // Melanger
         int n = slots.Count;
         while (n > 1) { n--; int k = _rng.Next(n + 1); (slots[k], slots[n]) = (slots[n], slots[k]); }
 
@@ -230,12 +184,10 @@ public class MerchantSpawner : MonoBehaviour
         int placed = 0;
         foreach (var (off, ord) in slots)
         {
-            if (placed >= 1) break; // 1 seul accessoire
+            if (placed >= 1) break;
             var pos = _origin + off;
             if (_occupiedCells.Contains(pos)) continue;
             if (gm != null && !MinesweeperLogic.IsInBounds(pos.x, pos.y, gm.Width, gm.Height)) continue;
-
-            // Verifier que la case n'a pas de danger
             var cell = gm?.GetCell(pos.x, pos.y);
             if (cell != null && cell.IsDangerous) continue;
 
@@ -249,7 +201,6 @@ public class MerchantSpawner : MonoBehaviour
     {
         if (_merchantPrefab == null) return;
 
-        // Devant la cal�che (Y-1)
         var candidates = new List<Vector2Int>
         {
             _origin + new Vector2Int( 0, -1),
@@ -258,7 +209,6 @@ public class MerchantSpawner : MonoBehaviour
             _origin + new Vector2Int( 0, -2),
         };
 
-        // Melanger
         int n = candidates.Count;
         while (n > 1) { n--; int k = _rng.Next(n + 1); (candidates[k], candidates[n]) = (candidates[n], candidates[k]); }
 
@@ -270,7 +220,6 @@ public class MerchantSpawner : MonoBehaviour
 
             var go = SpawnObject(_merchantPrefab, pos, "Aldric", _merchantScale, 5);
 
-            // Ajouter composants
             var npc = go.GetComponent<MerchantNPC>() ?? go.AddComponent<MerchantNPC>();
             var col = go.GetComponent<Collider2D>() ?? go.AddComponent<BoxCollider2D>();
             if (col is BoxCollider2D box) box.size = Vector2.one * 0.9f;
@@ -283,9 +232,7 @@ public class MerchantSpawner : MonoBehaviour
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private GameObject SpawnObject(GameObject prefab, Vector2Int gridPos, string label, float scale, int order)
     {
