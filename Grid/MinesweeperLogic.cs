@@ -30,6 +30,7 @@ public static class MinesweeperLogic
             {
                 var cell = grid[x, y];
                 if (cell.CountsAsAdjacentDanger) continue;
+                if (cell.IsMountainReserved || cell.IsCoastWater) continue;
 
                 int count = CountAdjacentDangers(grid, x, y, width, height);
                 cell.AdjacentDangerCount = count;
@@ -65,6 +66,7 @@ public static class MinesweeperLogic
                 if (y >= height) break;
                 var cell = grid[x, y];
                 if (cell == null || cell.CountsAsAdjacentDanger) continue;
+                if (cell.IsMountainReserved || cell.IsCoastWater) continue;
                 int count = CountAdjacentDangers(grid, x, y, width, height);
                 cell.AdjacentDangerCount = count;
                 cell.Content = count > 0 ? CellContent.Number : CellContent.Empty;
@@ -102,7 +104,7 @@ public static class MinesweeperLogic
 
             if (cell.IsFlagged) continue;
             if (cell.IsRevealed) continue;
-            if (cell.IsMountainReserved) continue; // montagne = pas de révélation par flood
+            if (cell.IsMountainReserved || cell.IsCoastWater) continue; // montagne/eau = pas de révélation par flood
             if (cell.CountsAsAdjacentDanger) continue;
 
             cell.Reveal();

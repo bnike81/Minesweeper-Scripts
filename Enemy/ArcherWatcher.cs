@@ -21,10 +21,20 @@ public class ArcherWatcher : MonoBehaviour
 {
     public static ArcherWatcher Instance { get; private set; }
 
-    [Header("Portée")]
-    [Tooltip("Distance max (Chebyshev) à laquelle l'archer détecte une case révélée. " +
-             "Doit correspondre à _archerRange dans EnemyBehaviour.")]
-    [SerializeField, Range(2, 6)] private int _detectionRange = 4;
+    [Header("Portée (fallback)")]
+    [Tooltip("Fallback si EnemyDatabase n est pas charge. " +
+             "Sinon lit attackRange depuis EnemyData.")]
+    [SerializeField, Range(2, 6)] private int _detectionRangeFallback = 4;
+
+    /// <summary>Portee effective : lit EnemyData si disponible.</summary>
+    private int DetectionRange
+    {
+        get
+        {
+            var data = EnemyDatabase.Instance?.Get(CellContent.Enemy_BanditArcher);
+            return data?.attackRange ?? _detectionRangeFallback;
+        }
+    }
 
     // Évite de traiter le même archer deux fois dans un même événement
     private readonly HashSet<(int, int)> _checked = new HashSet<(int, int)>();
@@ -66,8 +76,9 @@ public class ArcherWatcher : MonoBehaviour
 
         foreach (var c in cells)
         {
-            for (int dx = -_detectionRange; dx <= _detectionRange; dx++)
-                for (int dy = -_detectionRange; dy <= _detectionRange; dy++)
+            int range = DetectionRange;
+            for (int dx = -range; dx <= range; dx++)
+                for (int dy = -range; dy <= range; dy++)
                 {
                     int nx = c.X + dx;
                     int ny = c.Y + dy;
@@ -85,7 +96,7 @@ public class ArcherWatcher : MonoBehaviour
                         Mathf.Abs(hero.GridPosition.x - nx),
                         Mathf.Abs(hero.GridPosition.y - ny));
 
-                    if (heroDist < 1 || heroDist > _detectionRange) continue;
+                    if (heroDist < 1 || heroDist > range) continue;
 
                     MainGrid.Instance?.ForceRevealArcher(nx, ny);
                 }

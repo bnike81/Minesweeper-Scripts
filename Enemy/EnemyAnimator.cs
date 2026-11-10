@@ -1,10 +1,16 @@
-using UnityEngine;
+﻿using UnityEngine;
 using System.Collections;
 
 /// <summary>
 /// EnemyAnimator - Toutes les coroutines d animation des ennemis.
 /// Separe de EnemyInstance pour la lisibilite.
 /// Chaque ennemi a ses propres sprites et timings configures dans Inspector.
+///
+/// FIX v4 : les gardes IsPlaying() apres les alertes ont ete RETIRES.
+///   Cause : apres l alerte, IsPlaying() pouvait retourner false
+///   (GameManager null ou timing) et bloquer l attaque silencieusement.
+///   Le check _ei.IsDead suffit — EnemyAttackDamage() verifie deja IsPlaying
+///   avant d infliger les degats.
 /// </summary>
 [RequireComponent(typeof(EnemyInstance))]
 public class EnemyAnimator : MonoBehaviour
@@ -79,22 +85,41 @@ public class EnemyAnimator : MonoBehaviour
 
     public IEnumerator WolfAlertThenAttack()
     {
+        Debug.Log("<color=#FF6600>[EnemyAnimator]</color> Wolf alerte START");
         yield return StartCoroutine(WolfAlertAnim());
-        if (_ei.IsDead) yield break;
-        if (!IsPlaying()) yield break;
-        // WolfAttackAnim inclut les degats a la frame 6
+
+        if (_ei.IsDead)
+        {
+            Debug.Log("<color=#FF6600>[EnemyAnimator]</color> Wolf mort apres alerte — skip attaque");
+            yield break;
+        }
+
+        // ── FIX v4 : IsPlaying() RETIRE ──
+        // L ancien garde bloquait l attaque si GameManager.IsPlaying etait false.
+        // EnemyAttackDamage() verifie deja IsPlaying avant d infliger les degats.
+        Debug.Log("<color=#FF6600>[EnemyAnimator]</color> Wolf attaque START");
         yield return StartCoroutine(WolfAttackAnim());
+        Debug.Log("<color=#FF6600>[EnemyAnimator]</color> Wolf attaque FIN");
     }
 
     public IEnumerator BanditSwordAlertThenAttack()
     {
+        Debug.Log("<color=#FF6600>[EnemyAnimator]</color> BanditSword alerte START");
         var alert = _ei.FacingRight ? _swordAlertRight : _swordAlertLeft;
         yield return StartCoroutine(PlaySprites(alert, _swordAlertFrameTime));
         ApplySwordCombatIdle();
-        if (_ei.IsDead) yield break;
-        if (!IsPlaying()) yield break;
+
+        if (_ei.IsDead)
+        {
+            Debug.Log("<color=#FF6600>[EnemyAnimator]</color> BanditSword mort apres alerte — skip attaque");
+            yield break;
+        }
+
+        // ── FIX v4 : IsPlaying() RETIRE ──
+        Debug.Log("<color=#FF6600>[EnemyAnimator]</color> BanditSword attaque START");
         yield return new WaitForSeconds(0.2f);
         yield return StartCoroutine(BanditSwordAttackAnim());
+        Debug.Log("<color=#FF6600>[EnemyAnimator]</color> BanditSword attaque FIN");
     }
 
     public IEnumerator BanditSwordAttackAnim()
@@ -149,6 +174,13 @@ public class EnemyAnimator : MonoBehaviour
         yield return new WaitForSeconds(_attackDelay);
     }
 
+    /// <summary>Surcharge avec callback degats a la fin du lunge</summary>
+    public IEnumerator AttackLungeAnim(System.Action onDamage)
+    {
+        yield return StartCoroutine(AttackLungeAnim());
+        onDamage?.Invoke();
+    }
+
     public IEnumerator HitFlashAnim()
     {
         if (_sr == null) yield break;
@@ -191,7 +223,7 @@ public class EnemyAnimator : MonoBehaviour
     {
         if (_sr == null) return;
         var arr = _ei.FacingRight ? _wolfAlertRight : _wolfAlertLeft;
-        if (arr != null && arr.Length > 2 && arr[2] != null) _sr.sprite = arr[2];
+        if (arr != null && arr.Length > 0 && arr[0] != null) _sr.sprite = arr[0];
     }
 
     public void ApplySwordIdle()
@@ -220,16 +252,24 @@ public class EnemyAnimator : MonoBehaviour
     }
 
     // =========================================================================
-    // Priv�
+    // Prive
     // =========================================================================
 
-    private IEnumerator WolfAlertAnim()
+    public IEnumerator WolfAlertAnim()
     {
         var sprites = _ei.FacingRight ? _wolfAlertRight : _wolfAlertLeft;
         yield return StartCoroutine(PlaySprites(sprites, _wolfAlertFrameTime));
     }
 
-    private IEnumerator WolfAttackAnim()
+    /// <summary>Alerte bandit epee seule (sans enchainer l attaque)</summary>
+    public IEnumerator BanditSwordAlertAnim()
+    {
+        var alert = _ei.FacingRight ? _swordAlertRight : _swordAlertLeft;
+        yield return StartCoroutine(PlaySprites(alert, _swordAlertFrameTime));
+        ApplySwordCombatIdle();
+    }
+
+    public IEnumerator WolfAttackAnim()
     {
         var sprites = _ei.FacingRight ? _wolfAttackRight : _wolfAttackLeft;
         var dir = GetHeroDir();
@@ -269,6 +309,8 @@ public class EnemyAnimator : MonoBehaviour
         return (hero.transform.position - _ei.OriginalPos).normalized;
     }
 
+    // IsPlaying() conserve pour reference mais PLUS UTILISE dans les gardes d attaque.
+    // EnemyAttackDamage() fait deja ce check avant d infliger les degats.
     private bool IsPlaying()
     {
         var gm = GameManager.Instance;

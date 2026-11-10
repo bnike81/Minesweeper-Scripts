@@ -97,6 +97,27 @@ public enum ItemID
     Fromage = 7,
     Fleur = 8,
     Parchemin = 9,
+
+    // ── Forêt ────────────────────────
+    FleurRouge = 10,
+
+    // ── Cave ─────────────────────────
+    Silex = 11,
+    Cristal = 12,
+    Champignon = 13,
+
+    // ── Plage ────────────────────────
+    NoixDeCoco = 14,
+    FibreDePalme = 15,
+}
+
+// Cote du bord de grille pour la mer
+public enum CoastSide
+{
+    South,      // bas — cote horizontale
+    East,       // droite — cote verticale
+    West,       // gauche — cote verticale
+    RandomWE    // probabilite 50/50 entre West et East
 }
 
 // Slot d'equipement

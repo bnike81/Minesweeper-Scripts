@@ -80,10 +80,18 @@ public class MainGrid : MonoBehaviour
     // INIT
     // =========================================================================
 
+    /// <summary>Force l'assignation de l'Instance (utilisé par GridManager en fallback build).</summary>
+    public void EnsureInstance()
+    {
+        if (Instance == null) Instance = this;
+    }
+
     private void Awake()
     {
-        if (Instance != null && Instance != this) { Destroy(gameObject); return; }
+        Debug.Log("[MainGrid] Awake() appelé");
+        if (Instance != null && Instance != this) { Debug.Log("[MainGrid] Duplicate détruit !"); Destroy(gameObject); return; }
         Instance = this;
+        Debug.Log("[MainGrid] Instance assignée OK");
     }
 
     private void OnEnable()
@@ -386,6 +394,7 @@ public class MainGrid : MonoBehaviour
             var view = _cellViews[x, y];
             if (view == null || cell == null) continue;
             if (cell.IsRevealed) continue;
+            if (cell.IsCoastWater) continue; // eau = pas d'arbres
 
             // Seuls Forest et Beach ont des arbres/palmiers
             bool isForest = (cell.Biome == BiomeType.Forest);
@@ -393,8 +402,11 @@ public class MainGrid : MonoBehaviour
             if (!isForest && !isBeach) continue;
 
             // Calculer le layer selon les voisins révélés
-            bool belowRevealed = (y == 0) || gm.Grid[x, y - 1].IsRevealed;
-            bool aboveRevealed = (y >= gm.Height - 1) || gm.Grid[x, y + 1].IsRevealed;
+            // Coast water compte comme "revealed" pour que le tronc apparaisse au bord de mer
+            var belowCell = (y > 0) ? gm.Grid[x, y - 1] : null;
+            var aboveCell = (y < gm.Height - 1) ? gm.Grid[x, y + 1] : null;
+            bool belowRevealed = (y == 0) || belowCell.IsRevealed || belowCell.IsCoastWater;
+            bool aboveRevealed = (y >= gm.Height - 1) || aboveCell.IsRevealed || aboveCell.IsCoastWater;
 
             ForestCellView.TreeLayerType type;
             if (belowRevealed && aboveRevealed) type = ForestCellView.TreeLayerType.Buisson;

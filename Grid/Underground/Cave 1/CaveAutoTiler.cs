@@ -93,25 +93,19 @@ public static class CaveAutoTiler
 
     private static Sprite Resolve(int c, int d, CaveSpriteSet s)
     {
+        // ── Edges : sol sur 1 côté cardinal ──────────────────────────────────
         if (c == S) return s.edgeN ?? s.wallFull;
         if (c == N) return s.edgeS ?? s.wallFull;
         if (c == E) return s.edgeW ?? s.wallFull;
         if (c == W) return s.edgeE ?? s.wallFull;
 
+        // ── Inners : sol sur 2 côtés cardinaux adjacents (coin concave) ─────
         if (c == (S | E)) return s.innerNW ?? s.wallFull;
         if (c == (S | W)) return s.innerNE ?? s.wallFull;
         if (c == (N | E)) return s.innerSW ?? s.wallFull;
         if (c == (N | W)) return s.innerSE ?? s.wallFull;
 
-        if (c == (N | S)) return s.corridorH ?? s.wallFull;
-        if (c == (E | W)) return s.corridorV ?? s.wallFull;
-
-        if (c == (S | E | N)) return s.deadEndW ?? s.innerNW ?? s.wallFull;
-        if (c == (S | W | N)) return s.deadEndE ?? s.innerNE ?? s.wallFull;
-        if (c == (E | W | N)) return s.deadEndS ?? s.innerSW ?? s.wallFull;
-        if (c == (E | W | S)) return s.deadEndN ?? s.innerSE ?? s.wallFull;
-        if (c == (S | E | N | W)) return s.wallFull;
-
+        // ── Corners : aucun sol cardinal, sol sur 1 diagonale (coin convexe) ─
         if (c == 0)
         {
             if ((d & 1) != 0) return s.cornerNW ?? s.wallFull;
@@ -120,15 +114,7 @@ public static class CaveAutoTiler
             if ((d & 8) != 0) return s.cornerNE ?? s.wallFull;
         }
 
-        if (c == S && (d & 1) != 0) return s.angle45_NW ?? s.edgeN ?? s.wallFull;
-        if (c == S && (d & 8) != 0) return s.angle45_NE ?? s.edgeN ?? s.wallFull;
-        if (c == N && (d & 2) != 0) return s.angle45_SW ?? s.edgeS ?? s.wallFull;
-        if (c == N && (d & 4) != 0) return s.angle45_SE ?? s.edgeS ?? s.wallFull;
-        if (c == E && (d & 1) != 0) return s.angle45_NW ?? s.edgeW ?? s.wallFull;
-        if (c == E && (d & 2) != 0) return s.angle45_SW ?? s.edgeW ?? s.wallFull;
-        if (c == W && (d & 4) != 0) return s.angle45_SE ?? s.edgeE ?? s.wallFull;
-        if (c == W && (d & 8) != 0) return s.angle45_NE ?? s.edgeE ?? s.wallFull;
-
+        // Fallback — cas non géré (ne devrait pas arriver avec une grotte bien formée)
         return s.wallFull;
     }
 
@@ -147,6 +133,10 @@ public static class CaveAutoTiler
         if (c == E) return "EDGE_W"; if (c == W) return "EDGE_E";
         if (c == (S | E)) return "INNER_NW"; if (c == (S | W)) return "INNER_NE";
         if (c == (N | E)) return "INNER_SW"; if (c == (N | W)) return "INNER_SE";
+        if (c == 0 && (d & 1) != 0) return "CORNER_NW";
+        if (c == 0 && (d & 2) != 0) return "CORNER_SW";
+        if (c == 0 && (d & 4) != 0) return "CORNER_SE";
+        if (c == 0 && (d & 8) != 0) return "CORNER_NE";
         return $"WALL_C{c}_D{d}";
     }
 }

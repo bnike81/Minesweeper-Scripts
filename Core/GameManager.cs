@@ -1,4 +1,5 @@
 ﻿using UnityEngine;
+using UnityEngine.SceneManagement;
 using System.Collections;
 
 /// <summary>
@@ -63,8 +64,8 @@ public class GameManager : MonoBehaviour
 
     private void Start()
     {
-        // En build : toujours démarrer sur Playing
-        // En Editor : respecter _initialState pour tester les menus
+        // En Editor : toutes les scènes sont déjà ouvertes (multi-scene editing)
+        // → on peut lancer StartNewRun() directement
 #if UNITY_EDITOR
         if (_initialState == GameState.Playing)
         {
@@ -72,10 +73,69 @@ public class GameManager : MonoBehaviour
             StartNewRun();
         }
 #else
-        // Build standalone → démarrer directement le jeu
-        Log("Lancement build standalone");
-        StartNewRun();
+        // Build standalone → GameManager gère lui-même la séquence de boot.
+        // On charge toutes les scènes additivement, puis on lance le jeu.
+        Log("Build standalone — lancement séquence de boot intégrée");
+        StartCoroutine(BuildBootSequence());
 #endif
+    }
+
+    /// <summary>
+    /// Séquence de boot pour le build standalone.
+    /// Remplace le Bootstrapper (qui peut être absent de la scène Core).
+    /// Charge les scènes permanentes + zones, puis lance le jeu via SceneLoader.
+    /// </summary>
+    private IEnumerator BuildBootSequence()
+    {
+        Log("BuildBootSequence — début chargement des scènes...");
+
+        // 1. Charger les scènes permanentes
+        yield return LoadSceneIfNeeded("UI");
+        yield return LoadSceneIfNeeded("Hero");
+
+        // 2. Charger les zones (managers s'initialisent, contenu caché)
+        yield return LoadSceneIfNeeded("Underground");
+        yield return LoadSceneIfNeeded("Indoor");
+
+        Log("BuildBootSequence — toutes les scènes secondaires chargées");
+
+        // 3. Lancer le jeu : SceneLoader charge MainGrid puis appelle StartNewRun()
+        if (SceneLoader.Instance != null)
+        {
+            Log("BuildBootSequence — appel SceneLoader.StartGame()");
+            SceneLoader.Instance.StartGame();
+        }
+        else
+        {
+            // Fallback : SceneLoader absent → charger MainGrid directement
+            Debug.LogWarning("[GameManager] SceneLoader.Instance est NULL — chargement MainGrid en fallback");
+            yield return LoadSceneIfNeeded("MainGrid");
+
+            // Définir MainGrid comme scène active
+            var mainScene = SceneManager.GetSceneByName("MainGrid");
+            if (mainScene.isLoaded)
+                SceneManager.SetActiveScene(mainScene);
+
+            Log("BuildBootSequence — MainGrid chargée en fallback, appel StartNewRun()");
+            StartNewRun();
+        }
+
+        Log("BuildBootSequence — séquence terminée");
+    }
+
+    private IEnumerator LoadSceneIfNeeded(string sceneName)
+    {
+        if (SceneManager.GetSceneByName(sceneName).isLoaded)
+        {
+            Log($"Scène déjà chargée : {sceneName}");
+            yield break;
+        }
+
+        var op = SceneManager.LoadSceneAsync(sceneName, LoadSceneMode.Additive);
+        while (op != null && !op.isDone)
+            yield return null;
+
+        Log($"Scène chargée : {sceneName}");
     }
 
     private void OnDestroy()

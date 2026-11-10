@@ -1,9 +1,16 @@
-using UnityEngine;
+ï»¿using UnityEngine;
 
 /// <summary>
-/// HeroState - Source unique de verite pour tous les etats du heros.
-/// Tous les scripts lisent et ecrivent ici.
-/// Un Reset() d'urgence remet tout a zero.
+/// HeroState v8 â€” Source unique de verite pour tous les etats du heros.
+///
+/// FIX v8 :
+///   1. Le timer de securite (3s) IGNORE le blocage pendant le tour ennemi.
+///      Quand TurnManager est actif et ce n est pas HeroTurn, le blocage
+///      via IsUILocked est NORMAL (les ennemis jouent). Le timer ne doit
+///      pas couper ce verrouillage.
+///   2. ResetAll() appelle HeroCombat.ForceReset() pour nettoyer les flags
+///      IsAnimating, IsInCombat, IsFlinching si le reset de securite se
+///      declenche. Sans ca, le hero peut rester bloque en etat de combat.
 /// </summary>
 public class HeroState : MonoBehaviour
 {
@@ -58,20 +65,30 @@ public class HeroState : MonoBehaviour
     private void OnRunStarted(OnRunStarted e) => ResetAll();
 
     // -------------------------------------------------------------------------
-    // Reset d urgence - appelez ca si tout se bloque
+    // Reset d urgence
     // -------------------------------------------------------------------------
 
+    /// <summary>
+    /// FIX v8 : reset complet incluant HeroCombat.
+    /// Si HeroCombat a des flags actifs (IsAnimating, IsInCombat, IsFlinching),
+    /// ForceReset() les nettoie aussi. Sans ca, le hero peut rester visuellement
+    /// bloque en posture de combat apres un reset de securite.
+    /// </summary>
     public void ResetAll()
     {
         IsMoving = false;
         IsCalculating = false;
         IsUILocked = false;
         CollectOnArrival = false;
+
+        // FIX v8 : nettoyer aussi l etat de combat du hero
+        HeroCombat.Instance?.ForceReset();
+
         Debug.Log("<color=#AAFFFF>[HeroState]</color> Reset complet");
     }
 
     // -------------------------------------------------------------------------
-    // Debug - affiche l etat dans la console
+    // Debug
     // -------------------------------------------------------------------------
 
     [ContextMenu("Debug State")]
@@ -85,17 +102,35 @@ public class HeroState : MonoBehaviour
             + " CanMove=" + CanMove);
     }
 
-    // Securite : si bloque plus de 5s sans raison, reset auto
+    // Securite : si bloque plus de 3s sans raison, reset auto
     private float _blockTimer = 0f;
 
+    /// <summary>
+    /// FIX v8 : le timer de securite ne compte PAS pendant le tour ennemi.
+    /// Quand TurnManager gere le combat et que c est le tour des ennemis,
+    /// IsUILocked=true est VOULU â€” le hero doit attendre. Le timer ne doit
+    /// pas couper ce verrouillage intentionnel.
+    ///
+    /// Avant v8, avec 2+ ennemis le tour pouvait depasser 3s, declenchant
+    /// ResetAll() qui debloquait le hero PENDANT les attaques ennemies.
+    /// </summary>
     private void Update()
     {
         if (!HasAppeared) return;
 
         if (IsBlocked || IsMoving || IsCalculating)
         {
+            // â”€â”€ FIX v8 : ne PAS compter le timer pendant le tour ennemi â”€â”€
+            // Le blocage est NORMAL et VOULU quand les ennemis jouent.
+            var tm = TurnManager.Instance;
+            if (tm != null && tm.IsActive && !tm.IsHeroTurn)
+            {
+                _blockTimer = 0f;
+                return;
+            }
+
             _blockTimer += Time.deltaTime;
-            if (_blockTimer > 3f)   // était 8f — 3s suffit pour débloquer sans gêner le gameplay
+            if (_blockTimer > 3f)
             {
                 Debug.LogWarning("<color=#FFAA00>[HeroState]</color> Blocage detecte - reset auto !");
                 ResetAll();

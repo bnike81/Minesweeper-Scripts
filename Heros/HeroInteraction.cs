@@ -38,13 +38,21 @@ public class HeroInteraction : MonoBehaviour
         _cellStep = GridManager.Instance?.CellStep ?? _cellStep;
     }
 
+    /// <summary>Convertit une pos grille en pos monde via la grille active (surface/cave).</summary>
+    private Vector3 GridToWorld(Vector2Int p)
+    {
+        var grid = ActiveGrid.Current;
+        if (grid != null) return grid.GridToWorld(p.x, p.y);
+        return new Vector3(p.x * _cellStep, p.y * _cellStep, 0f);
+    }
+
     // -------------------------------------------------------------------------
     // Verifie et declenche un piege sur la case du heros
     // -------------------------------------------------------------------------
 
     public TrapInstance CheckTrap(Vector2Int heroPos)
     {
-        var wp = new Vector2(heroPos.x * _cellStep, heroPos.y * _cellStep);
+        var wp = (Vector2)GridToWorld(heroPos);
         var hits = Physics2D.OverlapCircleAll(wp, _cellStep * 0.3f);
 
         foreach (var h in hits)
@@ -64,7 +72,7 @@ public class HeroInteraction : MonoBehaviour
 
     public bool HasGroundItemAt(Vector2Int pos)
     {
-        var wp = new Vector2(pos.x * _cellStep, pos.y * _cellStep);
+        var wp = (Vector2)GridToWorld(pos);
         var hits = Physics2D.OverlapCircleAll(wp, _cellStep * 0.3f);
         foreach (var h in hits)
         {
@@ -85,7 +93,7 @@ public class HeroInteraction : MonoBehaviour
         if (state == null || !state.CollectOnArrival) return;
         state.CollectOnArrival = false;
 
-        var wp = new Vector2(heroPos.x * _cellStep, heroPos.y * _cellStep);
+        var wp = (Vector2)GridToWorld(heroPos);
         var hits = Physics2D.OverlapCircleAll(wp, _cellStep * 0.3f);
 
         foreach (var h in hits)
@@ -95,10 +103,13 @@ public class HeroInteraction : MonoBehaviour
             var ground = h.GetComponent<GroundItem>();
             if (ground == null || ground.ItemData == null) continue;
 
-            // Verifier meme case exacte
-            int ix = Mathf.RoundToInt(h.transform.position.x / _cellStep);
-            int iy = Mathf.RoundToInt(h.transform.position.y / _cellStep);
-            if (ix != heroPos.x || iy != heroPos.y) continue;
+            // Verifier meme case exacte via la grille active
+            var grid = ActiveGrid.Current;
+            Vector2Int itemGrid = grid != null
+                ? grid.WorldToGrid(h.transform.position)
+                : new Vector2Int(Mathf.RoundToInt(h.transform.position.x / _cellStep),
+                                 Mathf.RoundToInt(h.transform.position.y / _cellStep));
+            if (itemGrid.x != heroPos.x || itemGrid.y != heroPos.y) continue;
 
             var item = ground.ItemData;
             bool firstTime = Inventory.Instance != null

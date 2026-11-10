@@ -87,7 +87,7 @@ public class HeroPathfinder : MonoBehaviour
         if (pos == heroPos) return false;
         // Cases montagne = infranchissables
         var cell = gm.GetCell(pos.x, pos.y);
-        if (cell != null && cell.IsMountainReserved) return true;
+        if (cell != null && (cell.IsMountainReserved || cell.IsCoastWater)) return true;
         if (!IsRevealed(pos, gm)) return true;
         return _cacheBuilt && _blockedCache.Contains(pos);
     }

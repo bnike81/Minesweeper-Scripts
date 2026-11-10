@@ -6,6 +6,12 @@ using System.Collections;
 /// EnemyInstance - Stats, HP, clic joueur, mort, feedback visuel.
 /// Les animations sont dans EnemyAnimator.
 /// Les comportements IA sont dans EnemyBehaviour.
+///
+/// FIX v5 :
+///   PlayerAttackSequence — quand TurnManager est actif, la contre-attaque
+///   legacy (beh.CounterAttack) est SUPPRIMEE. Le TurnManager gere les
+///   attaques ennemies via EnemyTurnSequence → TakeTurn.
+///   Cela elimine les doubles attaques et les blocages de mouvement.
 /// </summary>
 public class EnemyInstance : MonoBehaviour,
     IPointerClickHandler, IPointerEnterHandler, IPointerExitHandler
@@ -63,6 +69,16 @@ public class EnemyInstance : MonoBehaviour,
     }
 
     public int GetDamage() => GetAttackDamage();
+
+    /// <summary>
+    /// Met a jour la position grille de l ennemi (appele par EnemyBehaviour.MoveTowardHero).
+    /// </summary>
+    public void SetGridPosition(int x, int y)
+    {
+        _gridX = x;
+        _gridY = y;
+        _originalPos = transform.position;
+    }
 
     // Barre de vie
     private SpriteRenderer _healthBarBgRenderer;
@@ -158,6 +174,16 @@ public class EnemyInstance : MonoBehaviour,
         if (eventData.button != PointerEventData.InputButton.Left) return;
         if (_isAttacking) return;
 
+        // ── FIX v6 : empecher le clic pendant le tour ennemi ──
+        // Sans ce garde, un clic pendant EnemyTurn lance une attaque parasite
+        // qui desynchronise TurnManager (NotifyActionComplete pendant EnemyTurn).
+        var tm = TurnManager.Instance;
+        if (tm != null && tm.IsActive && !tm.IsHeroTurn)
+        {
+            Debug.Log("<color=#00AAFF>[EnemyInstance]</color> Clic BLOQUE — ce n est pas le tour du heros");
+            return;
+        }
+
         var heroState = HeroState.Instance;
         if (heroState != null) heroState.IsUILocked = true;
 
@@ -195,7 +221,7 @@ public class EnemyInstance : MonoBehaviour,
     }
 
     // =========================================================================
-    // Reçoit une attaque du joueur
+    // Recoit une attaque du joueur
     // =========================================================================
 
     public void ReceiveAttack(int dmg)
@@ -204,6 +230,11 @@ public class EnemyInstance : MonoBehaviour,
         StartCoroutine(PlayerAttackSequence(dmg));
     }
 
+    /// <summary>
+    /// FIX v5 : quand TurnManager est actif, PAS de contre-attaque legacy.
+    /// Le TurnManager enchainera avec EnemyTurnSequence → TakeTurn
+    /// apres reception de OnHeroActionComplete (publie par HeroCombat v5).
+    /// </summary>
     private IEnumerator PlayerAttackSequence(int dmg)
     {
         _isAnimating = true;
@@ -211,7 +242,7 @@ public class EnemyInstance : MonoBehaviour,
 
         UpdateFacing();
 
-        // Orienter le heros vers l ennemi qui contre-attaque
+        // Orienter le heros vers l ennemi
         var hero = HeroController.Instance;
         if (hero != null)
         {
@@ -219,19 +250,32 @@ public class EnemyInstance : MonoBehaviour,
             hero.SetIdleFacing(enemyOnRight);
         }
 
-        // Feedback
+        // Feedback visuel
         StartCoroutine(HitFlash());
         StartCoroutine(HitShake());
         TakeDamage(dmg);
 
         if (!_isDead)
         {
-            yield return WaitCache.Get(_attackDelay);
-            var beh = GetComponent<EnemyBehaviour>();
-            if (beh != null)
-                yield return StartCoroutine(beh.CounterAttack());
-            // Sans EnemyBehaviour : pas de contre-attaque automatique
-            // FallbackAttackDelay gere l attaque initiale a la decouverte
+            // ── FIX v5 : verifier si TurnManager gere le combat ──
+            var tm = TurnManager.Instance;
+            if (tm != null && tm.IsActive)
+            {
+                // TurnManager actif → PAS de contre-attaque ici.
+                // Le TurnManager lancera EnemyTurnSequence → TakeTurn
+                // quand il recevra OnHeroActionComplete de HeroCombat.
+                Debug.Log("<color=#00AAFF>[EnemyInstance]</color> " + GetEnemyName()
+                    + " — contre-attaque legacy IGNOREE (TurnManager actif)");
+                yield return WaitCache.Get(0.2f); // petit delai pour le feedback visuel
+            }
+            else
+            {
+                // Mode libre (pas de TurnManager) → contre-attaque legacy
+                yield return WaitCache.Get(_attackDelay);
+                var beh = GetComponent<EnemyBehaviour>();
+                if (beh != null)
+                    yield return StartCoroutine(beh.CounterAttack());
+            }
         }
 
         _isAnimating = false;
@@ -239,7 +283,7 @@ public class EnemyInstance : MonoBehaviour,
     }
 
     // =========================================================================
-    // Attaque ennemie → héros
+    // Attaque ennemie → heros
     // =========================================================================
 
     public void EnemyAttackDamage() => EnemyAttack();
@@ -268,7 +312,7 @@ public class EnemyInstance : MonoBehaviour,
     }
 
     // =========================================================================
-    // Dégâts et mort
+    // Degats et mort
     // =========================================================================
 
     private void TakeDamage(int dmg)
@@ -440,7 +484,7 @@ public class EnemyInstance : MonoBehaviour,
         if (_healthBarFillRenderer != null) _healthBarFillRenderer.enabled = v;
     }
 
-    // Sprite blanc partagé — créé une seule fois pour TOUS les ennemis
+    // Sprite blanc partage — cree une seule fois pour TOUS les ennemis
     private static Sprite _sharedWhiteSprite;
     private static Sprite GetWhiteSprite()
     {
@@ -454,7 +498,7 @@ public class EnemyInstance : MonoBehaviour,
     }
 
     // =========================================================================
-    // Données par type
+    // Donnees par type
     // =========================================================================
 
     private int GetMaxHP(CellContent t)
@@ -523,7 +567,7 @@ public class EnemyInstance : MonoBehaviour,
             CellContent.Enemy_Mercenary => "Mercenaire",
             CellContent.Enemy_BanditSword => "Bandit",
             CellContent.Enemy_BanditArcher => "Archer",
-            CellContent.Enemy_Spider => "Araignée",
+            CellContent.Enemy_Spider => "Araignee",
             CellContent.Enemy_Bat => "Chauve-Souris",
             CellContent.Enemy_GoblinLance => "Goblin Lance",
             CellContent.Enemy_GoblinMasse => "Goblin Masse",

@@ -70,12 +70,17 @@ public class CaveManager : MonoBehaviour
     public bool IsInCave { get; private set; }
     public int ActiveCaveIndex => _activeLink.caveIndex;
 
+    /// <summary>Container parent pour les objets underground (auto-hide à la sortie).</summary>
+    public Transform UndergroundContentRoot =>
+        _undergroundContent != null ? _undergroundContent.transform : transform;
+
     /// <summary>Retourne le Y min et max de la cave active dans la grille.</summary>
     public (int minY, int maxY) GetCaveYRange(int caveIndex)
     {
         if (_caveLayouts.TryGetValue(caveIndex, out var layout))
         {
-            int minY = Mathf.Max(0, layout.EntryLocalY - 5);
+            // CaveBotY = borne basse réelle de la génération (inclut zone sous portails)
+            int minY = Mathf.Max(0, layout.CaveBotY);
             int maxY = layout.ExitLocalY + layout.Height / 2;
             return (minY, maxY);
         }
@@ -358,10 +363,13 @@ public class CaveManager : MonoBehaviour
 
         int ci = _activeLink.caveIndex;
 
-        // Spawn hero au bon portail
+        // Spawn hero sur le portail (+1 car le portail layout est décalé de 1 en Y)
         var spawnGrid = new Vector2Int(_activeLink.caveX, _activeLink.caveY + 1);
         var spawnWorld = _undergroundGrid.GridToWorld(spawnGrid.x, spawnGrid.y);
         HeroController.Instance?.TeleportToCave(spawnGrid.x, spawnGrid.y, spawnWorld);
+
+        // Révéler zone safe autour du spawn (portail + voisins)
+        RevealSafeZone(spawnGrid.x, spawnGrid.y);
 
         // ── Isoler la cave active ─────────────────────────────────────────────
         // Activer le CaveSpawner actif, désactiver les autres.
@@ -427,6 +435,28 @@ public class CaveManager : MonoBehaviour
             _activeLink.surfaceX, _activeLink.surfaceY, world);
 
         Debug.Log($"[CaveManager] ◄ Retour surface ({_activeLink.surfaceX},{_activeLink.surfaceY})");
+    }
+
+    // =========================================================================
+    // SAFE ZONE — Révèle portail + voisins pour que le héros puisse bouger
+    // =========================================================================
+
+    private void RevealSafeZone(int cx, int cy)
+    {
+        if (_undergroundGrid == null) return;
+        for (int dx = -1; dx <= 1; dx++)
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                int nx = cx + dx, ny = cy + dy;
+                if (!_undergroundGrid.IsInBounds(nx, ny)) continue;
+                if (!_undergroundGrid.IsFloor(nx, ny)) continue;
+                var cell = _undergroundGrid.GetCell(nx, ny);
+                if (cell == null || cell.IsRevealed) continue;
+                // Ne révéler que les cases sûres (pas d'ennemis dans la zone de spawn)
+                if (!cell.IsDangerous)
+                    cell.ForceReveal();
+            }
+        UndergroundCellView.RefreshAllViews();
     }
 
     // =========================================================================

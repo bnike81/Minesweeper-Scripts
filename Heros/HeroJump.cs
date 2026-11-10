@@ -133,6 +133,8 @@ public class HeroJump : MonoBehaviour
 
                     var cell = gm.GetCell(c.x, c.y);
                     if (cell == null || !cell.IsRevealed) continue;
+                    // Exclure les murs (révélés mais non-sol) et cases bloquées
+                    if (gm.IsBlocked(c.x, c.y)) continue;
 
                     float distFromHero = Mathf.Max(
                         Mathf.Abs(c.x - hero.x),
@@ -236,5 +238,9 @@ public class HeroJump : MonoBehaviour
         => p.x >= 0 && p.y >= 0 && p.x < gm.Width && p.y < gm.Height;
 
     private Vector3 GridToWorld(Vector2Int p)
-        => new Vector3(p.x * _cellStep, p.y * _cellStep, -0.5f);
+    {
+        var grid = ActiveGrid.Current;
+        if (grid != null) return grid.GridToWorld(p.x, p.y, -0.5f);
+        return new Vector3(p.x * _cellStep, p.y * _cellStep, -0.5f);
+    }
 }

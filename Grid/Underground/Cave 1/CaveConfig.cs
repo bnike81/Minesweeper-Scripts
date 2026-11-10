@@ -41,7 +41,11 @@ public class CaveConfig : ScriptableObject
     [Tooltip("Nombre d'impasses pour cacher du loot")]
     [Range(0, 6)] public int deadEndCount = 3;
     [Tooltip("Longueur d'une impasse (en cases)")]
-    [Range(3, 8)] public int deadEndLength = 5;
+    [Range(3, 15)] public int deadEndLength = 8;
+    [Tooltip("Largeur d'une impasse (en cases) — plus large qu'un couloir")]
+    [Range(2, 5)] public int deadEndWidth = 3;
+    [Tooltip("Espace libre minimum devant le candidat pour creuser")]
+    [Range(3, 12)] public int deadEndMinFreeSpace = 6;
 
     [Header("═══ Portails (entrée/sortie) ═══")]
     [Tooltip("Largeur du portail (en cases)")]

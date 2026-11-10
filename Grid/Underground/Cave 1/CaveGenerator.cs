@@ -70,6 +70,18 @@ public class CaveGenerator : MonoBehaviour
     [Header("Debug Gizmos")]
     [SerializeField] private bool _showGizmos = true;
 
+    /// <summary>
+    /// Gizmos couleur par type d'élément :
+    ///   🔵 Bleu vif       = Portail (entrée/sortie)
+    ///   🔴 Rouge           = Bord portail protégé (hors-limite forcé)
+    ///   🟡 Jaune           = Grande salle (village goblin)
+    ///   🟢 Vert            = Petite salle
+    ///   🔵 Cyan            = Couloir de connexion
+    ///   🟣 Magenta         = Impasse (dead end)
+    ///   ⬛ Gris foncé      = Mur contour (adjacent au sol)
+    ///   ⬛ Gris très foncé = Roche profonde (pas de sol adjacent)
+    ///   ⬜ Blanc cassé     = Sol non typé (résidu de connectivité)
+    /// </summary>
     private void OnDrawGizmosSelected()
     {
         if (Layout == null || !_showGizmos) return;
@@ -81,13 +93,58 @@ public class CaveGenerator : MonoBehaviour
             {
                 Vector3 pos = new Vector3(x * cs + cs * 0.5f, oy + y * cs, 0f);
                 Vector3 size = new Vector3(cs * 0.9f, cs * 0.9f, 0.1f);
+                var cellType = Layout.GetCellType(x, y);
 
+                // ── Portails (priorité absolue) ──
                 if (CaveAutoTiler.IsPortalCell(Layout, x, y))
-                { Gizmos.color = Color.blue; Gizmos.DrawCube(pos, size); continue; }
+                {
+                    Gizmos.color = new Color(0.1f, 0.3f, 1f, 1f);   // bleu vif
+                    Gizmos.DrawCube(pos, size);
+                    continue;
+                }
+
+                // ── Bords portail protégés (hors-limite forcé) ──
+                if (cellType == CaveCellType.PortalEdge)
+                {
+                    Gizmos.color = new Color(1f, 0.15f, 0.15f, 0.9f); // rouge
+                    Gizmos.DrawCube(pos, size);
+                    continue;
+                }
+
+                // ── Cases non-sol (murs) ──
                 if (!Layout.IsFloor(x, y))
-                { Gizmos.color = new Color(0.3f, 0.3f, 0.3f, 0.5f); Gizmos.DrawCube(pos, size); continue; }
-                Gizmos.color = new Color(0.2f, 0.8f, 0.2f, 0.7f);
+                {
+                    bool isContour = CaveAutoTiler.IsWallContour(Layout, x, y);
+                    Gizmos.color = isContour
+                        ? new Color(0.45f, 0.45f, 0.45f, 0.6f)   // gris clair = mur contour
+                        : new Color(0.2f, 0.2f, 0.2f, 0.35f);    // gris foncé = roche profonde
+                    Gizmos.DrawCube(pos, size);
+                    continue;
+                }
+
+                // ── Cases sol — couleur par type ──
+                switch (cellType)
+                {
+                    case CaveCellType.LargeRoom:
+                        Gizmos.color = new Color(1f, 0.85f, 0.1f, 0.85f);  // jaune doré
+                        break;
+                    case CaveCellType.SmallRoom:
+                        Gizmos.color = new Color(0.2f, 0.8f, 0.2f, 0.8f);  // vert
+                        break;
+                    case CaveCellType.Corridor:
+                        Gizmos.color = new Color(0.1f, 0.85f, 0.9f, 0.8f); // cyan
+                        break;
+                    case CaveCellType.DeadEnd:
+                        Gizmos.color = new Color(0.85f, 0.2f, 0.85f, 0.8f); // magenta
+                        break;
+                    default:
+                        Gizmos.color = new Color(0.9f, 0.9f, 0.85f, 0.6f); // blanc cassé = sol non typé
+                        break;
+                }
                 Gizmos.DrawCube(pos, size);
             }
+
+        // ── Légende dans la console (une seule fois par repaint) ──
+        // Les couleurs sont documentées dans le commentaire XML ci-dessus.
     }
 }

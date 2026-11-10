@@ -33,6 +33,8 @@ public class Cell
     public bool IsMountainReserved { get; set; } = false;
     /// <summary>True = intérieur plateau (HighGrid fog). False = silhouette (MainGrid fog).</summary>
     public bool IsMountainPlateau { get; set; } = false;
+    /// <summary>True = cellule eau/côtière — bloque spawn, révélation, mouvement héros.</summary>
+    public bool IsCoastWater { get; set; } = false;
     public bool IsFlagged => State == CellState.Flagged;
 
     // ─── Danger (pour génération et logique) ──────────────────────────────────

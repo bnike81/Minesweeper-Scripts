@@ -6,11 +6,12 @@
 /// Créer : Assets → Create → MinesweeperRPG → Cave Sprite Set
 /// Assigner chaque sprite dans l'Inspector.
 ///
-/// CONVENTION DE NOMMAGE (bitmask cardinal) :
-///   N=1, E=2, S=4, W=8 (bits indiquant où il y a un MUR)
-///   Ex: edgeN = mur au nord → bord haut du sol
-///       cornerNE = mur au nord ET est → coin extérieur haut-droite
-///       innerNE = sol partout sauf diagonale NE → coin intérieur
+/// CONVENTION DE NOMMAGE :
+///   Le bitmask cardinal indique où il y a du SOL autour d'un mur.
+///   Le sprite est nommé à L'OPPOSÉ du sol (direction du mur vu depuis le sol).
+///   Ex: edgeN = sol au SUD du mur → ce mur est le bord NORD du sol
+///       cornerNW = sol en diag SE → coin convexe (extérieur) nord-ouest
+///       innerNW = sol au S+E → coin concave (intérieur) nord-ouest
 /// </summary>
 [CreateAssetMenu(fileName = "CaveSpriteSet", menuName = "MinesweeperRPG/Cave Sprite Set")]
 public class CaveSpriteSet : ScriptableObject
@@ -41,25 +42,9 @@ public class CaveSpriteSet : ScriptableObject
     public Sprite innerSE;  // mur diagonale sud-est
     public Sprite innerSW;  // mur diagonale sud-ouest
 
-    [Header("═══ Angles 45° ═══")]
-    [Tooltip("Transition en diagonale entre sol et mur")]
-    public Sprite angle45_NE;
-    public Sprite angle45_NW;
-    public Sprite angle45_SE;
-    public Sprite angle45_SW;
-
-    [Header("═══ Couloirs (mur sur 2 côtés opposés) ═══")]
-    public Sprite corridorH;  // murs nord + sud → couloir horizontal
-    public Sprite corridorV;  // murs est + ouest → couloir vertical
-
-    [Header("═══ Impasses (mur sur 3 côtés) ═══")]
-    public Sprite deadEndN;   // ouvert au nord seulement
-    public Sprite deadEndE;
-    public Sprite deadEndS;
-    public Sprite deadEndW;
-
-    [Header("═══ Mur plein ═══")]
-    public Sprite wallFull;   // entouré de murs (roche solide)
+    [Header("═══ Mur plein (fallback roche) ═══")]
+    [Tooltip("Roche profonde — fallback si aucun edge/corner/inner ne correspond")]
+    public Sprite wallFull;
 
     [Header("═══ Chiffres adjacents (mêmes sprites que MainGrid) ═══")]
     [Tooltip("Glisser les mêmes sprites 1-8 que dans le prefab CellView de MainGrid")]

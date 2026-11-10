@@ -63,10 +63,12 @@ public class UndergroundGrid : MonoBehaviour, IGridContext
         if (!IsInBounds(x, y)) return true;
         // Mur de contour ou roche = bloqué
         if (_isFloor != null && !_isFloor[x, y]) return true;
-        // Ennemi révélé vivant = bloqué (héros s'arrête adjacent)
         var cell = _grid?[x, y];
-        if (cell != null && cell.IsRevealed && cell.IsEnemy) return true;
-        // Cases sol non révélées = PAS bloquées en cave (pas d'arbres)
+        if (cell == null) return true;
+        // Case sol non révélée = bloquée (même logique que surface — jump requis)
+        if (!cell.IsRevealed) return true;
+        // Ennemi révélé vivant = bloqué (héros s'arrête adjacent)
+        if (cell.IsEnemy) return true;
         return false;
     }
 
@@ -77,8 +79,25 @@ public class UndergroundGrid : MonoBehaviour, IGridContext
         var cell = _grid[x, y];
         if (cell == null || cell.IsRevealed) return RevealResult.AlreadyRevealed;
         cell.ForceReveal();
-        if (cell.IsEnemy) return RevealResult.EnemyHit;
-        if (!cell.IsDangerous) FloodReveal(x, y);
+
+        // ── Collecter les cells révélées pour l'event ────────────────────
+        var revealed = new System.Collections.Generic.List<Cell> { cell };
+
+        if (cell.IsEnemy)
+        {
+            UndergroundCellView.RefreshAllViews();
+            EventBus.Publish(new OnCellsRevealed { Cells = revealed });
+            return RevealResult.EnemyHit;
+        }
+        if (!cell.IsDangerous) FloodReveal(x, y, revealed);
+
+        // Rafraîchir les sprites immédiatement
+        UndergroundCellView.RefreshAllViews();
+
+        // ── Publier l'event — déclenche LootSystem, FogOfWar, etc. ───────
+        if (revealed.Count > 0)
+            EventBus.Publish(new OnCellsRevealed { Cells = revealed });
+
         return RevealResult.Empty;
     }
 
@@ -294,7 +313,8 @@ public class UndergroundGrid : MonoBehaviour, IGridContext
     // FLOOD REVEAL
     // =========================================================================
 
-    private void FloodReveal(int startX, int startY)
+    private void FloodReveal(int startX, int startY,
+                              System.Collections.Generic.List<Cell> revealed = null)
     {
         var queue = new Queue<Vector2Int>();
         queue.Enqueue(new Vector2Int(startX, startY));
@@ -306,11 +326,14 @@ public class UndergroundGrid : MonoBehaviour, IGridContext
                 {
                     if (dx == 0 && dy == 0) continue;
                     int nx = p.x + dx, ny = p.y + dy;
-                    if (!IsInBounds(nx, ny) || IsBlocked(nx, ny)) continue;
+                    if (!IsInBounds(nx, ny)) continue;
+                    // Mur = stop (check direct, pas IsBlocked qui bloque les non-révélées)
+                    if (_isFloor != null && !_isFloor[nx, ny]) continue;
                     var nb = _grid[nx, ny];
                     if (nb == null || nb.IsRevealed) continue;
                     if (nb.IsEnemy || nb.IsBoss || nb.IsTrap) continue;
                     nb.ForceReveal();
+                    revealed?.Add(nb);
                     if (nb.AdjacentDangerCount == 0 && nb.Content == CellContent.Empty)
                         queue.Enqueue(new Vector2Int(nx, ny));
                 }

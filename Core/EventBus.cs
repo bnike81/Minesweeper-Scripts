@@ -77,6 +77,7 @@ public struct OnPlayerDied { }
 public struct OnXPGained { public int Amount; public int TotalXP; }
 public struct OnLevelUp { public int OldLevel, NewLevel; }
 public struct OnHUDRefreshRequest { }
+public struct OnHeroActionPerformed { }
 
 // ---- Notifications ----------------------------------------------------------
 public struct OnNotification { public string Message; public NotificationType Type; }
@@ -88,6 +89,17 @@ public struct OnItemPickedUp { public ItemID ItemID; public int Quantity; public
 
 // ---- Equipement -------------------------------------------------------------
 public struct OnEquipmentChanged { }
+
+// ---- Tour par tour ----------------------------------------------------------
+public enum TurnState { Inactive, HeroTurn, EnemyTurn }
+/// <summary>Le heros a termine son action (deplacement, attaque, revelation).</summary>
+public struct OnHeroActionComplete { }
+/// <summary>Tous les ennemis actifs ont joue leur tour.</summary>
+public struct OnEnemyTurnComplete { }
+/// <summary>Le TurnManager change d etat.</summary>
+public struct OnTurnStateChanged { public TurnState OldState, NewState; }
+/// <summary>L endurance du heros a change.</summary>
+public struct OnStaminaChanged { public int Current, Max; }
 
 // Publie avant placement dangers lors d'une extension de grille
 public struct OnGridExtending { public int OldHeight, NewHeight, Level, Width; }

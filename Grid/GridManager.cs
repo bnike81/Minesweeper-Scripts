@@ -183,6 +183,7 @@ public class GridManager : MonoBehaviour, IGridContext
     // ─── Unity Lifecycle ──────────────────────────────────────────────────────
     private void Awake()
     {
+        Debug.Log("[GridManager] Awake() appelé");
         // Charger EnemyDatabase pour que CellView puisse spawner les prefabs
         if (_enemyDatabase != null && EnemyDatabase.Instance == null)
         {
@@ -191,12 +192,14 @@ public class GridManager : MonoBehaviour, IGridContext
             _ = _enemyDatabase;
         }
 
-        if (Instance != null && Instance != this) { Destroy(gameObject); return; }
+        if (Instance != null && Instance != this) { Debug.Log("[GridManager] Duplicate détruit !"); Destroy(gameObject); return; }
         Instance = this;
+        Debug.Log("[GridManager] Instance assignée OK");
     }
 
     private void OnEnable()
     {
+        Debug.Log("[GridManager] OnEnable() — abonnement EventBus");
         EventBus.Subscribe<OnRunStarted>(OnRunStarted);
         EventBus.Subscribe<OnLevelUp>(OnLevelUp);
     }
@@ -208,7 +211,11 @@ public class GridManager : MonoBehaviour, IGridContext
     }
 
     // ─── Handlers EventBus ────────────────────────────────────────────────────
-    private void OnRunStarted(OnRunStarted evt) => InitializeGrid();
+    private void OnRunStarted(OnRunStarted evt)
+    {
+        Debug.Log("[GridManager] OnRunStarted reçu — appel InitializeGrid()");
+        InitializeGrid();
+    }
 
     private bool _isExtending = false;
 
@@ -282,7 +289,9 @@ public class GridManager : MonoBehaviour, IGridContext
     // ─── Initialisation ───────────────────────────────────────────────────────
     public void InitializeGrid()
     {
+        Debug.Log("[GridManager] InitializeGrid() démarré");
         var gm = GameManager.Instance;
+        if (gm == null) { Debug.LogError("[GridManager] GameManager.Instance est NULL !"); return; }
         _currentWidth = gm.StartGridWidth;
         _currentHeight = gm.StartGridHeight;
         _currentLevel = 1;
@@ -298,12 +307,14 @@ public class GridManager : MonoBehaviour, IGridContext
         // _cellViews géré par MainGrid
 
         // Génération directe — fiable, pas de coroutine
+        Debug.Log("[GridManager] InitializeGrid terminé — appel GenerateGrid()");
         GenerateGrid();
     }
 
     // ─── Génération de la grille ──────────────────────────────────────────────
     private void GenerateGrid()
     {
+        Debug.Log("[GridManager] GenerateGrid() démarré");
         // Mode Debug — appliquer les paramètres dev
         var gmc = GameModeConfig.Instance;
         if (gmc != null && gmc.IsDebug)
@@ -337,7 +348,13 @@ public class GridManager : MonoBehaviour, IGridContext
 
         // 2. Instancier les visuels (apres reservations de zones)
         // OnGridGenerated publié à la fin de SpawnInitialCellViewsAsync
-        MainGrid.Instance?.StartSpawning(0, _currentHeight, true, _currentLevel);
+        Debug.Log($"[GridManager] GenerateGrid terminé — MainGrid.Instance={(MainGrid.Instance != null ? "OK" : "NULL")} — appel StartSpawning(0,{_currentHeight})");
+        if (MainGrid.Instance == null)
+        {
+            Debug.LogError("[GridManager] ❌ MainGrid.Instance est NULL ! La scène MainGrid n'est probablement pas encore chargée.");
+            return;
+        }
+        MainGrid.Instance.StartSpawning(0, _currentHeight, true, _currentLevel);
     }
 
     // ─── Placement des dangers (après premier clic) ───────────────────────────
@@ -498,7 +515,7 @@ public class GridManager : MonoBehaviour, IGridContext
         if (cell == null) return RevealResult.AlreadyRevealed;
         if (cell.IsRevealed) return RevealResult.AlreadyRevealed;
         if (cell.IsFlagged) return RevealResult.Flagged;
-        if (cell.IsMountainReserved) return RevealResult.AlreadyRevealed;
+        if (cell.IsMountainReserved || cell.IsCoastWater) return RevealResult.AlreadyRevealed;
 
         // Premier clic : placement des dangers MAINTENANT
         if (!_firstClickDone)
@@ -704,6 +721,36 @@ public class GridManager : MonoBehaviour, IGridContext
         //Debug.Log("<color=#00FF88>[GridManager]</color> Ennemi vaincu en (" + x + "," + y + ") - adjacences mises a jour");
     }
 
+    /// <summary>
+    /// Deplace le contenu ennemi d'une case a une autre.
+    /// Utilise par EnemyRoamingSystem pour les rondes d'ennemis.
+    /// Swap le CellContent, recalcule les adjacences, rafraichit les vues.
+    /// Note : ne deplace PAS l'EnemyInstance (GO visuel) — c'est le role
+    /// de EnemyRoamingSystem apres cet appel.
+    /// </summary>
+    public void MoveEnemyOnGrid(int fromX, int fromY, int toX, int toY)
+    {
+        var fromCell = GetCell(fromX, fromY);
+        var toCell = GetCell(toX, toY);
+        if (fromCell == null || toCell == null) return;
+
+        // Swap du contenu
+        CellContent content = fromCell.Content;
+        toCell.Content = content;
+        fromCell.Content = CellContent.Empty;
+
+        // Recalculer toutes les adjacences
+        MinesweeperLogic.ComputeAllAdjacencies(_grid, _currentWidth, _currentHeight);
+
+        // Rafraichir les vues des cases revelees autour des deux positions
+        for (int dx = -1; dx <= 1; dx++)
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                RequestViewRefresh(fromX + dx, fromY + dy);
+                RequestViewRefresh(toX + dx, toY + dy);
+            }
+    }
+
     public Cell GetCell(int x, int y)
     {
         if (!MinesweeperLogic.IsInBounds(x, y, _currentWidth, _currentHeight)) return null;
@@ -718,8 +765,12 @@ public class GridManager : MonoBehaviour, IGridContext
         var list = _availableCellsBuffer;
         for (int x = 0; x < _currentWidth; x++)
             for (int y = 0; y < _currentHeight; y++)
-                if (!excluded.Contains((x, y)))
-                    list.Add(_grid[x, y]);
+            {
+                if (excluded.Contains((x, y))) continue;
+                var cell = _grid[x, y];
+                if (cell.IsMountainReserved || cell.IsCoastWater) continue;
+                list.Add(cell);
+            }
         return list;
     }
 

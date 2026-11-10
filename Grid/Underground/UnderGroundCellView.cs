@@ -306,10 +306,18 @@ public class UndergroundCellView : MonoBehaviour, IPointerClickHandler
             return;
         }
 
-        // ── Case non révélée → s'approcher et révéler ─────────────────────────
+        // ── Case non révélée → reveal direct + déplacement (mode test) ────────
+        // Comme en surface pré-héros : clic = révéler immédiatement,
+        // puis le héros se déplace aussi loin que possible vers la zone révélée.
         if (!_cell.IsRevealed)
         {
-            hero.ApproachAndRevealOnGrid(target, ug);
+            ug.RevealCell(_cell.X, _cell.Y);
+            // Après reveal, la case (et ses voisines flood) sont révélées
+            // → le héros peut s'y déplacer via pathfinding normal
+            if (_cell.IsRevealed && !_cell.IsEnemy)
+                hero.MoveOnGrid(target, ug);
+            else if (_cell.IsRevealed && _cell.IsEnemy)
+                hero.MoveOnGrid(target, ug); // s'arrêtera adjacent (IsBlocked)
             return;
         }
 

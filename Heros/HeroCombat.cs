@@ -1,18 +1,32 @@
-using UnityEngine;
+﻿using UnityEngine;
 using System.Collections;
 
 /// <summary>
-/// HeroCombat - Animations combat heros.
-/// 
-/// REGLES STRICTES :
-///   IsAnimating = true pendant TOUTE animation (degaine+attaque groupes)
-///   IsInCombat  = true des le premier clic, false apres rengaine
-///   IsUILocked  = miroir de IsAnimating pour bloquer HeroController
-/// 
-/// FLUX :
-///   1er clic ennemi -> DrawAndAttack (degaine + attaque1 sans interruption)
-///   clics suivants  -> DoAttack seulement (pas de degaine)
-///   clic deplacement -> SheathAndFlee
+/// HeroCombat v5 — Architecture combat unifiee avec TurnManager.
+///
+/// CHANGEMENTS vs v4 :
+///   1. Publie OnHeroActionComplete apres chaque attaque (DrawThenAttack, JustAttack)
+///      → TurnManager recoit le signal et lance le tour ennemi.
+///   2. Publie OnHeroActionComplete apres SheathThenFlee (rengaine + fuite)
+///      → le deplacement du heros est considere comme son action de tour.
+///
+/// FIX v6 :
+///   - SheathThenFlee : onDone AVANT NotifyActionComplete
+///
+/// FIX v7 :
+///   - Ajout IsFlinching pour que TurnManager puisse attendre la fin du flinch
+///     avant de deverrouiller le hero.
+///
+/// PRINCIPE :
+///   TurnManager est l UNIQUE autorite du cycle de combat.
+///   HeroCombat signale la fin de chaque action hero via OnHeroActionComplete.
+///   TurnManager gere ensuite le tour ennemi (EnemyTurnSequence).
+///   Aucune contre-attaque legacy ne passe par ici.
+///
+/// CONSERVE de v4 :
+///   - PlayHitAnimation ne verrouille PAS le mouvement (flinch visuel seulement)
+///   - ForceReset() pour HeroState.ResetAll()
+///   - _activeHitCoroutine tracking
 /// </summary>
 public class HeroCombat : MonoBehaviour
 {
@@ -53,17 +67,26 @@ public class HeroCombat : MonoBehaviour
     [SerializeField, Range(0.04f, 0.15f)] private float _sheathFrameTime = 0.08f;
 
     // -------------------------------------------------------------------------
-    // Etat - source unique de verite
+    // Etat
     // -------------------------------------------------------------------------
 
     public bool IsInCombat { get; private set; } = false;
     public bool IsAnimating { get; private set; } = false;
+
+    /// <summary>
+    /// FIX v7 : expose l etat du flinch (hurt animation) pour TurnManager.
+    /// TurnManager attend IsFlinching == false avant de deverrouiller le hero.
+    /// </summary>
+    public bool IsFlinching => _activeHitCoroutine != null;
 
     private bool _facingRight = true;
     private bool _useAttack2Next = false;
     private Sprite _combatIdleSprite = null;
     private SpriteRenderer _sr;
     private EnemyInstance _currentEnemy;
+
+    // Tracking du flinch — v4 ajout
+    private Coroutine _activeHitCoroutine;
 
     // -------------------------------------------------------------------------
 
@@ -88,38 +111,54 @@ public class HeroCombat : MonoBehaviour
         EventBus.Unsubscribe<OnPlayerDamaged>(OnPlayerDamaged);
     }
 
+    // =========================================================================
+    // DEGATS RECUS — flinch visuel SANS verrouillage
+    // =========================================================================
+
     private void OnPlayerDamaged(OnPlayerDamaged evt)
     {
         if (evt.Damage <= 0) return;
-        // Trouver d ou vient l ennemi qui attaque
+
+        // Si une animation HERO est en cours (Draw/Attack/Sheath),
+        // ne pas lancer de flinch → evite les conflits de sprites.
+        if (IsAnimating)
+        {
+            Debug.Log("<color=#FF00FF>[HeroCombat]</color> OnPlayerDamaged — flinch BLOQUE (IsAnimating=true)");
+            return;
+        }
+
         bool fromRight = FindAttackerDirection();
-        StartCoroutine(PlayHitAnimation(fromRight));
+        Debug.Log("<color=#FF00FF>[HeroCombat]</color> OnPlayerDamaged — flinch (dmg=" + evt.Damage + ")");
+
+        // Stopper un flinch precedent si encore en cours
+        if (_activeHitCoroutine != null)
+        {
+            StopCoroutine(_activeHitCoroutine);
+            _activeHitCoroutine = null;
+        }
+
+        _activeHitCoroutine = StartCoroutine(PlayHitAnimation(fromRight));
     }
 
     private bool FindAttackerDirection()
     {
-        // Chercher l ennemi le plus proche qui est en animation
-        float cs = GridManager.Instance?.CellStep ?? 1.05f;
         var hero = HeroController.Instance;
         if (hero == null) return true;
 
         foreach (var ei in EnemyInstance.All)
         {
             if (!ei.IsAnimating || ei.IsDead) continue;
-            // L ennemi attaquant est a gauche ou droite du heros
             return ei.transform.position.x > hero.transform.position.x;
         }
-        // Fallback : utiliser _facingRight inverse
         return !_facingRight;
     }
 
+    /// <summary>
+    /// Flinch visuel — ne verrouille PAS le mouvement.
+    /// Seules les actions HERO (Draw/Attack/Sheath) verrouillent.
+    /// </summary>
     private IEnumerator PlayHitAnimation(bool attackFromRight)
     {
-        if (IsAnimating) yield break;
-        SetLocked(true);
-
-        // Direction du coup = cote d ou vient l attaque
-        // Le heros regarde vers l attaquant
         bool lookRight = attackFromRight;
         Sprite[] sprites;
 
@@ -137,22 +176,20 @@ public class HeroCombat : MonoBehaviour
             }
         }
 
-        // Apres le coup : orienter le heros face a l attaquant
+        // Restaurer le sprite idle
         if (IsInCombat)
         {
-            // Mettre a jour _facingRight selon la direction du coup
             _facingRight = attackFromRight;
             ShowIdle();
         }
         else
         {
-            // Pas encore en combat - orienter l idle vers l attaquant
             var hero = HeroController.Instance;
             if (hero != null)
                 hero.SetIdleFacing(attackFromRight);
         }
 
-        SetLocked(false);
+        _activeHitCoroutine = null;
     }
 
     // =========================================================================
@@ -170,6 +207,13 @@ public class HeroCombat : MonoBehaviour
 
         _currentEnemy = enemy;
         UpdateFacing(enemy);
+
+        // Stopper le flinch si en cours
+        if (_activeHitCoroutine != null)
+        {
+            StopCoroutine(_activeHitCoroutine);
+            _activeHitCoroutine = null;
+        }
 
         if (!IsInCombat)
             StartCoroutine(DrawThenAttack(enemy));
@@ -190,7 +234,6 @@ public class HeroCombat : MonoBehaviour
         }
         if (IsAnimating)
         {
-            // Attendre la fin de l animation courante puis rengainer
             StartCoroutine(WaitThenSheath(onDone));
             return;
         }
@@ -206,18 +249,18 @@ public class HeroCombat : MonoBehaviour
         SetLocked(true);
         IsInCombat = true;
 
-        // Degaine
         yield return StartCoroutine(PlayAnim(
             _facingRight ? _drawRight : _drawLeft, _drawFrameTime));
 
-        // Sauvegarder posture combat
         _combatIdleSprite = GetLast(_facingRight ? _drawRight : _drawLeft);
         ShowIdle();
 
-        // Attaque directement - pas de deverrouillage entre les deux
         yield return StartCoroutine(RunAttack(enemy));
 
         SetLocked(false);
+
+        // ── v5 : signaler au TurnManager que l action hero est terminee ──
+        NotifyActionComplete();
     }
 
     private IEnumerator JustAttack(EnemyInstance enemy)
@@ -225,6 +268,9 @@ public class HeroCombat : MonoBehaviour
         SetLocked(true);
         yield return StartCoroutine(RunAttack(enemy));
         SetLocked(false);
+
+        // ── v5 : signaler au TurnManager que l action hero est terminee ──
+        NotifyActionComplete();
     }
 
     /// <summary>Animation d attaque pure + infliger degats</summary>
@@ -252,7 +298,6 @@ public class HeroCombat : MonoBehaviour
 
         ShowIdle();
 
-        // Degats apres animation
         if (enemy != null && !enemy.IsDead)
         {
             int dmg = Mathf.Max(1, Equipment.Instance?.AttackDamage ?? 1);
@@ -262,7 +307,6 @@ public class HeroCombat : MonoBehaviour
 
     private IEnumerator WaitThenSheath(System.Action onDone)
     {
-        // Attendre que IsAnimating redevienne false
         while (IsAnimating) yield return null;
         yield return StartCoroutine(SheathThenFlee(onDone));
     }
@@ -280,19 +324,67 @@ public class HeroCombat : MonoBehaviour
         SetLocked(false);
         HeroController.Instance?.SetIdleSprite();
 
+        // ── FIX v6 : onDone AVANT NotifyActionComplete ──
+        // L ancien ordre (Notify → onDone) causait un blocage :
+        // TurnManager verrouillait IsUILocked=true AVANT que le mouvement ne demarre.
+        // Nouveau flux :
+        //   1. onDone.Invoke() → demarre le deplacement (coroutine)
+        //   2. NotifyActionComplete → TurnManager lance le tour ennemi
+        // Le heros se deplace PENDANT que les ennemis jouent. Apres le tour ennemi,
+        // IsUILocked=false et le hero peut re-agir normalement.
         onDone?.Invoke();
+        NotifyActionComplete();
+    }
+
+    // =========================================================================
+    // v5 — Signal au TurnManager
+    // =========================================================================
+
+    /// <summary>
+    /// Publie OnHeroActionComplete pour signaler au TurnManager
+    /// que le heros a termine son action (attaque ou fuite).
+    /// Ne fait rien si TurnManager n existe pas ou n est pas actif
+    /// (mode libre — pas de tour par tour).
+    /// </summary>
+    private void NotifyActionComplete()
+    {
+        var tm = TurnManager.Instance;
+        if (tm == null) return;
+
+        // Publier meme si TurnManager est Inactive — il pourrait
+        // reactiver le combat si un ennemi est en perception.
+        // OnHeroActionDone() dans TurnManager gere les deux cas.
+        Debug.Log("<color=#FF00FF>[HeroCombat]</color> → OnHeroActionComplete");
+        EventBus.Publish(new OnHeroActionComplete());
+    }
+
+    // =========================================================================
+    // Reset d urgence (appele par HeroState.ResetAll)
+    // =========================================================================
+
+    public void ForceReset()
+    {
+        StopAllCoroutines();
+        _activeHitCoroutine = null;
+        IsAnimating = false;
+        IsInCombat = false;
+        _currentEnemy = null;
+        _useAttack2Next = false;
+        HeroController.Instance?.RestoreIdleSprite();
+        Debug.Log("<color=#FFAA00>[HeroCombat]</color> ForceReset");
     }
 
     // =========================================================================
     // Helpers
     // =========================================================================
 
-    /// <summary>Verrou unique pour IsAnimating + HeroState.IsUILocked</summary>
+    /// <summary>Verrou : IsAnimating + HeroState.IsUILocked</summary>
     private void SetLocked(bool locked)
     {
         IsAnimating = locked;
         if (HeroState.Instance != null)
             HeroState.Instance.IsUILocked = locked;
+        Debug.Log("<color=#FF00FF>[HeroCombat]</color> SetLocked(" + locked + ")");
     }
 
     private void UpdateFacing(EnemyInstance enemy)
