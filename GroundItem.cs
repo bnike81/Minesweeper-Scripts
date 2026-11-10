@@ -32,13 +32,24 @@ public class GroundItem : MonoBehaviour
         _startPos = transform.position;
         _sr = GetComponent<SpriteRenderer>();
 
-        // Calculer la case grille et s'enregistrer
-        var gm = GridManager.Instance;
-        if (gm != null)
+        // Calculer la case grille via la grille active (surface OU cave)
+        var grid = ActiveGrid.Current;
+        if (grid != null)
         {
-            _gridX = Mathf.RoundToInt(transform.position.x / gm.CellStep);
-            _gridY = Mathf.RoundToInt(transform.position.y / gm.CellStep);
+            var gp = grid.WorldToGrid(transform.position);
+            _gridX = gp.x;
+            _gridY = gp.y;
             LootSystem.RegisterGroundItem(_gridX, _gridY);
+        }
+        else
+        {
+            var gm = GridManager.Instance;
+            if (gm != null)
+            {
+                _gridX = Mathf.RoundToInt(transform.position.x / gm.CellStep);
+                _gridY = Mathf.RoundToInt(transform.position.y / gm.CellStep);
+                LootSystem.RegisterGroundItem(_gridX, _gridY);
+            }
         }
 
         StartCoroutine(BobRoutine());

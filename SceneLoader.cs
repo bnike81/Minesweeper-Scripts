@@ -119,6 +119,14 @@ public class SceneLoader : MonoBehaviour
 
             CurrentZone = ZoneScene.MainGrid;
             Debug.Log("[SceneLoader] MainGrid active + définie comme scène active.");
+
+            // Maintenant que MainGrid est chargée, lancer le jeu
+            // (en build, GameManager.Start() n'appelle plus StartNewRun())
+            if (GameManager.Instance != null)
+            {
+                Debug.Log("[SceneLoader] Appel GameManager.StartNewRun() après chargement MainGrid");
+                GameManager.Instance.StartNewRun();
+            }
         }));
     }
 

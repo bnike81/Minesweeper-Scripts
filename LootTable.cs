@@ -1,38 +1,41 @@
 ﻿using UnityEngine;
+using System.Collections.Generic;
 
 /// <summary>
-/// LootTable — ScriptableObject de configuration du loot par zone.
+/// LootTable — ScriptableObject de configuration du loot par biome.
 ///
-/// Un LootTable par zone :
-///   LootTable_Surface.asset    → forêt (gold, pommes, branches)
-///   LootTable_Cave.asset       → grottes (cristaux, minerais, reliques)
-///   LootTable_Indoor.asset     → intérieurs (recettes, nourriture)
+/// Un LootTable par biome :
+///   LootTable_Forest.asset  → pomme, branche, pièce d'or, fleur rouge
+///   LootTable_Cave.asset    → silex, cristal, champignon, pièce d'or
+///   LootTable_Beach.asset   → noix de coco, fibre de palme, pièce d'or
 ///
-/// Le LootSystem (Core) lit la table de la zone active.
-/// Ajouter une nouvelle zone = créer un nouveau .asset, zéro code.
+/// Créer : Assets → Create → MinesweeperRPG → Loot Table
+/// Ajouter un biome = créer un nouveau .asset + l'assigner dans LootSystem.
 /// </summary>
 [CreateAssetMenu(fileName = "LootTable", menuName = "MinesweeperRPG/Loot Table")]
 public class LootTable : ScriptableObject
 {
-    [Header("Monnaie")]
-    [Range(0f, 0.5f)] public float goldChance = 0.03f;
-    [Range(1, 10)] public int goldMax = 3;
+    [Tooltip("Liste des items pouvant apparaître au sol dans ce biome")]
+    public List<LootEntry> entries = new();
 
-    [Header("Consommables")]
-    [Range(0f, 0.3f)] public float food1Chance = 0.04f;
-    public ItemID food1Item = ItemID.Pomme;
+    /// <summary>Retourne true si la table contient au moins un item.</summary>
+    public bool HasEntries => entries != null && entries.Count > 0;
+}
 
-    [Header("Matériaux")]
-    [Range(0f, 0.3f)] public float mat1Chance = 0.03f;
-    public ItemID mat1Item = ItemID.Branche;
-    [Range(1, 5)] public int mat1Max = 2;
+/// <summary>
+/// Une entrée de loot : quel item, quelle chance, combien max par case.
+/// </summary>
+[System.Serializable]
+public class LootEntry
+{
+    [Tooltip("L'item à faire apparaître")]
+    public ItemID item;
 
-    [Header("Items spéciaux (zone)")]
-    [Range(0f, 0.1f)] public float specialChance = 0f;
-    public ItemID specialItem = ItemID.None;
+    [Tooltip("Chance par case révélée (0 = jamais, 0.05 = 5%)")]
+    [Range(0f, 0.5f)]
+    public float chance = 0.03f;
 
-    // ── Méthode helper ───────────────────────────────────────────────────────
-
-    /// <summary>Retourne true si la table a des items spéciaux configurés.</summary>
-    public bool HasSpecialItems => specialChance > 0f && specialItem != ItemID.None;
+    [Tooltip("Quantité max par case (1 = toujours 1, 3 = entre 1 et 3)")]
+    [Range(1, 5)]
+    public int maxPerCell = 1;
 }

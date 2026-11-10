@@ -159,4 +159,5 @@ public class HUDView : MonoBehaviour
         NotificationType.Item => _notifColorItem,
         _ => Color.white
     };
+
 }
