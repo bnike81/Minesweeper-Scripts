@@ -32,7 +32,16 @@ public class GroundItem : MonoBehaviour
         _startPos = transform.position;
         _sr = GetComponent<SpriteRenderer>();
 
-        // Calculer la case grille via la grille active (surface OU cave)
+        // rendre le collider invisible a l EventSystem ───
+        // isTrigger = true → Physics2DRaycaster l ignore (les clics passent
+        // a travers vers l EnemyInstance en dessous).
+        // OverlapCircleAll le detecte toujours → TryCollect fonctionne.
+
+        var col = GetComponent<Collider2D>();
+        if (col != null) col.isTrigger = true;
+        // ─── fin v13 FIX ───
+
+        // ... le reste de Initialize() est INCHANGE ...
         var grid = ActiveGrid.Current;
         if (grid != null)
         {
