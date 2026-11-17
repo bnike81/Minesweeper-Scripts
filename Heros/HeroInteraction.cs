@@ -1,11 +1,9 @@
-using UnityEngine;
+﻿using UnityEngine;
 using System.Collections;
 
-/// <summary>
 /// HeroInteraction - Gere la collecte d items et les interactions NPC.
 /// Separe de HeroController pour la clarte.
 /// La collecte ne se declenche QUE si CollectOnArrival = true.
-/// </summary>
 public class HeroInteraction : MonoBehaviour
 {
     public static HeroInteraction Instance { get; private set; }
@@ -111,21 +109,65 @@ public class HeroInteraction : MonoBehaviour
                                  Mathf.RoundToInt(h.transform.position.y / _cellStep));
             if (itemGrid.x != heroPos.x || itemGrid.y != heroPos.y) continue;
 
+            // ─── v13 FIX : ne PAS bloquer si en combat actif ───
+            // Si TurnManager est actif (combat en cours), ne pas ramasser maintenant.
+            // L item sera collecte apres la fin du combat quand le heros
+            // ira sur la case (ou par un clic manuel post-combat).
+            var tm = TurnManager.Instance;
+            if (tm != null && tm.IsActive)
+            {
+                Debug.Log("<color=#FFD700>[HeroInteraction]</color> Item ignore pendant combat actif");
+                return;
+            }
+            // ─── fin check combat ───
+
             var item = ground.ItemData;
             bool firstTime = Inventory.Instance != null
                           && !Inventory.Instance.HasDiscovered(item.itemID);
 
             ground.HideImmediate();
-            state.IsUILocked = true;
 
-            ItemPickupUI.Instance?.ShowPickup(item, firstTime, () =>
+            // ─── v13 FIX : securite anti-blocage ───
+            var pickupUI = ItemPickupUI.Instance;
+            if (pickupUI != null)
             {
+                state.IsUILocked = true;
+
+                pickupUI.ShowPickup(item, firstTime, () =>
+                {
+                    Inventory.Instance?.AddItem(item, ground.Quantity);
+                    Inventory.Instance?.MarkDiscovered(item.itemID);
+                    ground.Collect();
+                    state.IsUILocked = false;
+                });
+
+                // Filet de securite : debloquer apres 5 secondes si le callback
+                // n a jamais ete appele (ne devrait pas arriver, mais au cas ou)
+                StartCoroutine(SafetyUnlock(state, 5f));
+            }
+            else
+            {
+                // Pas de UI → collecte directe sans bloquer
+                Debug.LogWarning("[HeroInteraction] ItemPickupUI null — collecte directe");
                 Inventory.Instance?.AddItem(item, ground.Quantity);
                 Inventory.Instance?.MarkDiscovered(item.itemID);
                 ground.Collect();
-                state.IsUILocked = false;
-            });
+            }
+            // ─── fin v13 FIX ───
+
             return;
+        }
+    }
+
+     /// Filet de securite : si IsUILocked est encore true apres le delai,
+     /// on le force a false pour eviter un blocage permanent.
+    private System.Collections.IEnumerator SafetyUnlock(HeroState state, float timeout)
+    {
+        yield return new WaitForSeconds(timeout);
+        if (state != null && state.IsUILocked)
+        {
+            Debug.LogWarning("[HeroInteraction] SAFETY: IsUILocked force a false apres timeout");
+            state.IsUILocked = false;
         }
     }
 }

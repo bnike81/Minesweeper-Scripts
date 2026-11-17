@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 using UnityEngine.InputSystem;
 using System.Collections;
 using System.Collections.Generic;
@@ -133,7 +133,7 @@ public class HeroJump : MonoBehaviour
 
                     var cell = gm.GetCell(c.x, c.y);
                     if (cell == null || !cell.IsRevealed) continue;
-                    // Exclure les murs (r�v�l�s mais non-sol) et cases bloqu�es
+                    // Exclure les murs (révélés mais non-sol) et cases bloquées
                     if (gm.IsBlocked(c.x, c.y)) continue;
 
                     float distFromHero = Mathf.Max(
@@ -159,6 +159,15 @@ public class HeroJump : MonoBehaviour
     {
         IsJumping = true;
         if (_hero != null) _hero.IsLocked = true;
+
+        // ─── v13 Jour 6 : transitionner vers Jumping ───
+        var hs = HeroState.Instance;
+        bool smOwned = false;
+        if (hs != null)
+        {
+            smOwned = hs.TryTransition(HeroPhase.Jumping, "HeroJump.JumpRoutine start");
+        }
+        // ─── fin transition ───
 
         var sprites = GetJumpSprites(landing - from);
         Vector3 start = GridToWorld(from);
@@ -194,7 +203,6 @@ public class HeroJump : MonoBehaviour
             if (_hero != null) _hero.transform.position = pos;
 
             // Reveler a l atterrissage seulement si case non encore revelee
-            // (saut manuel du joueur - pas le saut automatique sur case revelee)
             if (!revealed && frame >= 6)
             {
                 revealed = true;
@@ -220,6 +228,13 @@ public class HeroJump : MonoBehaviour
         {
             _hero.IsLocked = false;
             _hero.RestoreIdleSprite();
+        }
+
+        // ─── v13 Jour 6 : retour a Idle (si on a bien transitionne et qu on est encore en Jumping) ───
+        if (smOwned && hs != null && hs.SM != null
+            && hs.SM.CurrentPhase == HeroPhase.Jumping)
+        {
+            hs.TryTransition(HeroPhase.Idle, "HeroJump.JumpRoutine end");
         }
     }
 

@@ -35,6 +35,17 @@ public class Cell
     public bool IsMountainPlateau { get; set; } = false;
     /// <summary>True = cellule eau/côtière — bloque spawn, révélation, mouvement héros.</summary>
     public bool IsCoastWater { get; set; } = false;
+
+    // ─── Terrain (chantier Stage Arena, etape 1) ──────────────────────────────
+    /// <summary>
+    /// Type de terrain de la case. Sol par defaut : l aventure n est pas modifiee.
+    /// Les stages le renseignent via TerrainRules.Apply, qui met aussi a jour
+    /// IsCoastWater / IsMountainReserved pour que pathfinder, flood fill et vues
+    /// existants reagissent sans modification.
+    /// </summary>
+    public TerrainType Terrain { get; set; } = TerrainType.Sol;
+    /// <summary>True = case infranchissable et non revelable (eau, montagne, mur).</summary>
+    public bool IsObstacle => Terrain != TerrainType.Sol || IsMountainReserved || IsCoastWater;
     public bool IsFlagged => State == CellState.Flagged;
 
     // ─── Danger (pour génération et logique) ──────────────────────────────────

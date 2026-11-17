@@ -47,10 +47,11 @@ public interface IGridContext
 /// </summary>
 public enum GridLayer
 {
-    Surface = 0,   // Grid 0 — forêt/montagne/plage
-    Indoor = 1,   // Intérieurs bâtiments
-    Underground = -1,   // Grid -1 — grottes, mines
-    Highland = 2,   // Grid +1 — plateaux [futur]
+    Surface = 0,      // Grid 0 — forêt/montagne/plage
+    Indoor = 1,       // Intérieurs bâtiments
+    Underground = -1, // Grid -1 — grottes, mines
+    Highland = 2,     // Grid +1 — plateaux [futur]
+    Arena = 3,        // v13 — mode arène (test + futur Colisée)
 }
 
 /// <summary>
@@ -65,11 +66,14 @@ public static class ActiveGrid
     {
         get
         {
+            // 0. Arene (test ou futur Colisee) — priorite max
+            var ag = ArenaGrid.Instance;
+            if (ag != null && ag.IsBuilt) return ag;
+
             // 1. Intérieur bâtiment
             var im = IndoorManager.Instance;
             if (im != null && im.IsIndoor)
             {
-                // IsIndoor=true garantit que la grille est prête — pas besoin de IsGenerated
                 var ig = im.ActiveIndoor;
                 if (ig != null) return ig;
             }
@@ -89,6 +93,7 @@ public static class ActiveGrid
     {
         get
         {
+            if (ArenaGrid.Instance != null && ArenaGrid.Instance.IsBuilt) return GridLayer.Arena;
             if (IndoorManager.Instance?.IsIndoor == true) return GridLayer.Indoor;
             if (CaveManager.Instance?.IsInCave == true) return GridLayer.Underground;
             return GridLayer.Surface;

@@ -1,6 +1,7 @@
-﻿using UnityEngine;
+﻿using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
 using UnityEngine.EventSystems;
-using System.Collections;
 
 /// <summary>
 /// EnemyInstance - Stats, HP, clic joueur, mort, feedback visuel.
@@ -20,7 +21,24 @@ public class EnemyInstance : MonoBehaviour,
     public static readonly System.Collections.Generic.List<EnemyInstance> All
         = new System.Collections.Generic.List<EnemyInstance>();
 
-    private void Awake() { if (!All.Contains(this)) All.Add(this); }
+    private void Awake()
+    {
+        if (!All.Contains(this)) All.Add(this);
+
+        // v13 Jour 11 : init FSM
+        _sm = new EnemyStateMachine(gameObject.name);
+        _sm.OnPhaseChanged += OnEnemyPhaseChanged;
+    }
+
+    /// v13 Jour 11 FIX : callback passif — ne synchronise PAS les flags legacy.
+    /// Les flags (_isDead, _isAnimating, _isAttacking) restent controles par
+    /// leur code d origine (Die, HitShake, attack handlers, etc.).
+    /// Ce callback est reserve au logging/debug futur.
+    private void OnEnemyPhaseChanged(EnemyPhase prev, EnemyPhase next)
+    {
+        // Pas d effet de bord. La FSM est passive — un observer.
+        // Pour tracer un evenement specifique de phase, ajouter ici.
+    }
     private void OnDestroy() { All.Remove(this); }
 
     // =========================================================================
@@ -50,6 +68,11 @@ public class EnemyInstance : MonoBehaviour,
     private bool _isAttacking = false;
     private bool _wolfFacingRight = true;
 
+    // v13 Jour 11 : machine d etat
+    private EnemyStateMachine _sm;
+    public EnemyStateMachine SM => _sm;
+    public EnemyPhase CurrentPhase => _sm != null ? _sm.CurrentPhase : EnemyPhase.NotSpawned;
+
     // Proprietes publiques
     public bool IsDead => _isDead;
     public bool IsAnimating { get => _isAnimating; set => _isAnimating = value; }
@@ -68,6 +91,11 @@ public class EnemyInstance : MonoBehaviour,
             _wolfFacingRight = hero.GridPosition.x >= _gridX;
     }
 
+    /// v13 Jour 11 : transition courte vers une phase donnee.
+    public bool TryTransition(EnemyPhase phase, string reason = "")
+    {
+        return _sm != null && _sm.TryTransitionTo(phase, reason);
+    }
     public int GetDamage() => GetAttackDamage();
 
     /// <summary>
@@ -156,6 +184,8 @@ public class EnemyInstance : MonoBehaviour,
             // Fallback sans EnemyBehaviour
             StartCoroutine(FallbackAttackDelay());
         }
+        // v13 Jour 11 : passage NotSpawned → Idle apres init
+        if (_sm != null) _sm.TryTransitionTo(EnemyPhase.Idle, "EnemyInstance.Setup");
     }
 
     private IEnumerator FallbackAttackDelay()
@@ -175,49 +205,67 @@ public class EnemyInstance : MonoBehaviour,
         if (_isAttacking) return;
 
         // ── FIX v6 : empecher le clic pendant le tour ennemi ──
-        // Sans ce garde, un clic pendant EnemyTurn lance une attaque parasite
-        // qui desynchronise TurnManager (NotifyActionComplete pendant EnemyTurn).
         var tm = TurnManager.Instance;
         if (tm != null && tm.IsActive && !tm.IsHeroTurn)
         {
-            Debug.Log("<color=#00AAFF>[EnemyInstance]</color> Clic BLOQUE — ce n est pas le tour du heros");
+            Debug.Log("<color=#00AAFF>[EnemyInstance]</color> Clic BLOQUE — pas le tour du heros");
             return;
         }
 
         var heroState = HeroState.Instance;
-        if (heroState != null) heroState.IsUILocked = true;
-
         var hero = HeroController.Instance;
-        if (hero != null)
-        {
-            var grid = ActiveGrid.Current;
-            Vector2Int heroGrid;
-            if (grid != null)
-                heroGrid = grid.WorldToGrid(hero.transform.position);
-            else
-            {
-                float cs = GridManager.Instance?.CellStep ?? 1.05f;
-                heroGrid = new Vector2Int(
-                    Mathf.RoundToInt(hero.transform.position.x / cs),
-                    Mathf.RoundToInt(hero.transform.position.y / cs));
-            }
-            int dist = Mathf.Max(Mathf.Abs(heroGrid.x - _gridX), Mathf.Abs(heroGrid.y - _gridY));
-            if (dist > 1)
-            {
-                if (heroState != null) heroState.IsUILocked = false;
-                return;
-            }
-        }
+        if (hero == null) return;
 
-        var combat = HeroCombat.Instance;
-        if (combat != null)
+        // Calcul distance Chebyshev via la grille active (offset-aware)
+        var grid = ActiveGrid.Current;
+        Vector2Int heroGrid;
+        if (grid != null)
+            heroGrid = grid.WorldToGrid(hero.transform.position);
+        else
         {
-            if (!combat.IsAnimating) combat.RequestAttack(this);
-            else if (heroState != null) heroState.IsUILocked = false;
+            float cs = GridManager.Instance?.CellStep ?? 1.05f;
+            heroGrid = new Vector2Int(
+                Mathf.RoundToInt(hero.transform.position.x / cs),
+                Mathf.RoundToInt(hero.transform.position.y / cs));
+        }
+        int dist = Mathf.Max(
+            Mathf.Abs(heroGrid.x - _gridX),
+            Mathf.Abs(heroGrid.y - _gridY));
+
+        Debug.Log($"<color=#FF8800>[EI.OnPointerClick]</color> " +
+                  $"hero=({heroGrid.x},{heroGrid.y}) enemy=({_gridX},{_gridY}) " +
+                  $"dist={dist} state={tm?.State}");
+
+        // ─── dist 1 : attaque directe ───
+        if (dist == 1)
+        {
+            Debug.Log("<color=#FF8800>[EI.OnPointerClick]</color> → RequestAttack direct (dist=1)");
+            var combat = HeroCombat.Instance;
+            if (combat != null && !combat.IsAnimating)
+            {
+                if (heroState != null) heroState.IsUILocked = true;
+                combat.RequestAttack(this);
+            }
             return;
         }
 
-        if (heroState != null) heroState.IsUILocked = false;
+        // ─── dist 2 : deplacement + attaque ───
+        if (dist == 2)
+        {
+            Debug.Log("<color=#FF8800>[EI.OnPointerClick]</color> → MoveToAndAttack (dist=2)");
+            // Le pathfinder va chercher la case adjacente a l ennemi la plus proche,
+            // deplacer le hero, puis attaquer.
+            hero.MoveToAndAttack(this);
+            return;
+        }
+
+        // ─── dist > 2 : trop loin ───
+        Debug.Log("<color=#FF8800>[EI.OnPointerClick]</color> → Trop loin (dist>2)");
+        EventBus.Publish(new OnNotification
+        {
+            Message = "Trop loin !",
+            Type = NotificationType.Warning
+        });
     }
 
     // =========================================================================
@@ -230,11 +278,11 @@ public class EnemyInstance : MonoBehaviour,
         StartCoroutine(PlayerAttackSequence(dmg));
     }
 
-    /// <summary>
-    /// FIX v5 : quand TurnManager est actif, PAS de contre-attaque legacy.
-    /// Le TurnManager enchainera avec EnemyTurnSequence → TakeTurn
-    /// apres reception de OnHeroActionComplete (publie par HeroCombat v5).
-    /// </summary>
+    /// Sequence de degats quand le heros attaque cet ennemi.
+    /// v5  : pas de contre-attaque legacy quand TurnManager actif.
+    /// v11 : HitShake + HitFlash en parallele, MAIS yieldees (attendre la fin).
+    ///       Feedback visuel garanti pour TOUS les ennemis (crabe, ours, etc.)
+    
     private IEnumerator PlayerAttackSequence(int dmg)
     {
         _isAnimating = true;
@@ -250,27 +298,25 @@ public class EnemyInstance : MonoBehaviour,
             hero.SetIdleFacing(enemyOnRight);
         }
 
-        // Feedback visuel
-        StartCoroutine(HitFlash());
-        StartCoroutine(HitShake());
+        // v11 : feedback visuel — flash + shake en parallele, mais attendus
+        var flashCo = StartCoroutine(HitFlash());
+        var shakeCo = StartCoroutine(HitShake());
         TakeDamage(dmg);
+
+        // Attendre que le shake soit fini (le plus long des deux)
+        yield return shakeCo;
 
         if (!_isDead)
         {
-            // ── FIX v5 : verifier si TurnManager gere le combat ──
             var tm = TurnManager.Instance;
             if (tm != null && tm.IsActive)
             {
-                // TurnManager actif → PAS de contre-attaque ici.
-                // Le TurnManager lancera EnemyTurnSequence → TakeTurn
-                // quand il recevra OnHeroActionComplete de HeroCombat.
                 Debug.Log("<color=#00AAFF>[EnemyInstance]</color> " + GetEnemyName()
                     + " — contre-attaque legacy IGNOREE (TurnManager actif)");
-                yield return WaitCache.Get(0.2f); // petit delai pour le feedback visuel
+                yield return WaitCache.Get(0.15f);
             }
             else
             {
-                // Mode libre (pas de TurnManager) → contre-attaque legacy
                 yield return WaitCache.Get(_attackDelay);
                 var beh = GetComponent<EnemyBehaviour>();
                 if (beh != null)
@@ -300,13 +346,25 @@ public class EnemyInstance : MonoBehaviour,
         int defense = Equipment.Instance?.Defense ?? 0;
         int finalDmg = Mathf.Max(0, dmg - defense);
 
-        if (finalDmg > 0)
-            EventBus.Publish(new OnPlayerDamaged
-            { Damage = finalDmg, CurrentHP = 0, MaxHP = 0 });
+        // ─── v13 FIX : publier TOUJOURS pour feedback visuel ───
+        // Meme si finalDmg=0 (defense totale), on publie pour que :
+        //  - HeroCombat joue l animation hurt (flinch)
+        //  - HeartBarUI shake meme sans perte de PV
+        //  - La notification s affiche
+        EventBus.Publish(new OnPlayerDamaged
+        {
+            Damage = finalDmg,
+            CurrentHP = 0,
+            MaxHP = 0
+        });
+
+        string msg = finalDmg > 0
+            ? GetEnemyName() + " attaque ! -" + finalDmg + " PV"
+            : GetEnemyName() + " attaque ! (bloque)";
 
         EventBus.Publish(new OnNotification
         {
-            Message = GetEnemyName() + " attaque ! -" + finalDmg + " PV",
+            Message = msg,
             Type = NotificationType.Damage
         });
     }
@@ -356,6 +414,43 @@ public class EnemyInstance : MonoBehaviour,
         }
 
         StartCoroutine(DeathAnimation());
+
+        // v13 Jour 11 FIX : transition FSM APRES avoir lance l animation,
+        // pour ne pas risquer d interrompre quoi que ce soit.
+        if (_sm != null) _sm.TryTransitionTo(EnemyPhase.Dead, "EnemyInstance.Die");
+    }
+
+    /// <summary>
+    /// Notifie la grille active que cet ennemi est vaincu.
+    /// Fonctionne pour MainGrid, UndergroundGrid, ArenaGrid et future grid.
+    /// </summary>
+    private void NotifyEnemyDefeatedToActiveGrid()
+    {
+        var active = ActiveGrid.Current;
+        if (active == null) return;
+
+        // Marquer la case Empty dans la grille active
+        var cell = active.GetCell(_gridX, _gridY);
+        if (cell != null) cell.Content = CellContent.Empty;
+
+        // Dispatcher selon le type concret (OnEnemyDefeated n est pas dans IGridContext)
+        switch (active)
+        {
+            case GridManager gm:
+                gm.OnEnemyDefeated(_gridX, _gridY);
+                break;
+            case UndergroundGrid ug:
+                ug.OnEnemyDefeated(_gridX, _gridY);
+                break;
+            case ArenaGrid ag:
+                ag.OnEnemyDefeated(_gridX, _gridY);
+                break;
+            // IndoorTileMapGrid : actuellement pas de combat Indoor → rien
+            default:
+                Debug.Log($"<color=#FFAA00>[EnemyInstance]</color> " +
+                          $"Pas de OnEnemyDefeated pour grille {active.GetType().Name}");
+                break;
+        }
     }
 
     // =========================================================================
@@ -370,16 +465,21 @@ public class EnemyInstance : MonoBehaviour,
         _sr.color = _originalColor;
     }
 
+    /// Shake de recul quand l ennemi recoit des degats.
+    /// v11 : amplitude augmentee pour meilleure lisibilite pixel art.
+   
     private IEnumerator HitShake()
     {
-        for (int i = 0; i < 3; i++)
+        var orig = _originalPos;
+        float amp = 0.10f; // v11 : augmente de 0.06 → 0.10
+        for (int i = 0; i < 4; i++) // v11 : 4 iterations au lieu de 3
         {
-            transform.position = _originalPos + new Vector3(0.06f, 0f, 0f);
+            transform.position = orig + new Vector3(amp, 0f, 0f);
             yield return WaitCache.Get(0.04f);
-            transform.position = _originalPos + new Vector3(-0.06f, 0f, 0f);
+            transform.position = orig + new Vector3(-amp, 0f, 0f);
             yield return WaitCache.Get(0.04f);
         }
-        transform.position = _originalPos;
+        transform.position = orig;
     }
 
     private IEnumerator DeathAnimation()
@@ -406,11 +506,14 @@ public class EnemyInstance : MonoBehaviour,
     // Hover
     // =========================================================================
 
+    private readonly List<GameObject> _perceptionOverlays = new List<GameObject>();
+    private static Sprite _sharedOverlaySprite;
     public void OnPointerEnter(PointerEventData e)
     {
         if (_isDead) return;
         if (_sr != null) _sr.color = Color.Lerp(_originalColor, Color.yellow, 0.3f);
         ShowLabel();
+        ShowPerceptionOverlay();
     }
 
     public void OnPointerExit(PointerEventData e)
@@ -418,8 +521,110 @@ public class EnemyInstance : MonoBehaviour,
         if (!_isDead && _sr != null)
             _sr.color = _originalColor;
         HideLabel();
+        HidePerceptionOverlay();
     }
 
+    /// Affiche un overlay rouge semi-transparent sur les cases
+    /// dans le rayon de perception de l ennemi (Manhattan distance).
+    /// Utilise perceptionFogColor de EnemyDatabase.
+    private void ShowPerceptionOverlay()
+    {
+        HidePerceptionOverlay();
+
+        var data = EnemyDatabase.Instance?.Get(EnemyType);
+        int radius = data?.perceptionRadius ?? 3;
+        Color overlayColor = data?.perceptionFogColor
+            ?? new Color(1f, 0f, 0f, 0.15f);
+
+        // Creer le sprite partage si necessaire
+        if (_sharedOverlaySprite == null)
+        {
+            var tex = new Texture2D(4, 4);
+            var px = new Color[16];
+            for (int i = 0; i < 16; i++) px[i] = Color.white;
+            tex.SetPixels(px);
+            tex.Apply();
+            _sharedOverlaySprite = Sprite.Create(
+                tex, new Rect(0, 0, 4, 4), new Vector2(0.5f, 0.5f), 4f);
+        }
+
+        float cellSize = GridManager.Instance?.CellStep ?? 1.05f;
+
+        // ─── v13 FIX FINAL : utiliser WorldToGrid pour obtenir la case
+        // reellement sous le sprite, en tenant compte de l offset grille ───
+        var activeGrid = ActiveGrid.Current;
+
+        int centerX, centerY;
+        if (activeGrid != null)
+        {
+            var centerGrid = activeGrid.WorldToGrid(transform.position);
+            centerX = centerGrid.x;
+            centerY = centerGrid.y;
+
+            // Securite : si hors bornes, retomber sur les coords logiques
+            if (!activeGrid.IsInBounds(centerX, centerY))
+            {
+                centerX = _gridX;
+                centerY = _gridY;
+            }
+        }
+        else
+        {
+            centerX = _gridX;
+            centerY = _gridY;
+        }
+        // ─── fin FIX ───
+
+        for (int dx = -radius; dx <= radius; dx++)
+        {
+            for (int dy = -radius; dy <= radius; dy++)
+            {
+                int manhattan = Mathf.Abs(dx) + Mathf.Abs(dy);
+                if (manhattan > radius) continue;
+                if (dx == 0 && dy == 0) continue;
+
+                int cx = centerX + dx;
+                int cy = centerY + dy;
+
+                if (activeGrid == null) continue;
+                if (!activeGrid.IsInBounds(cx, cy)) continue;
+
+                var cell = activeGrid.GetCell(cx, cy);
+                if (cell == null || !cell.IsRevealed) continue;
+
+                // Ne pas overlay les cases montagne/eau
+                if (cell.IsMountainReserved || cell.IsCoastWater) continue;
+
+                // Ne pas overlay les murs cave
+                if (activeGrid is UndergroundGrid ug && !ug.IsFloor(cx, cy)) continue;
+
+                // ─── v13 FIX : utiliser GridToWorld pour appliquer l offset ───
+                Vector3 worldPos = activeGrid.GridToWorld(cx, cy, -0.04f);
+
+                var go = new GameObject("PerceptionOverlay");
+                go.transform.position = worldPos;
+                go.transform.localScale = new Vector3(cellSize, cellSize, 1f);
+
+                var overlaysr = go.AddComponent<SpriteRenderer>();
+                overlaysr.sprite = _sharedOverlaySprite;
+                overlaysr.color = overlayColor;
+                overlaysr.sortingLayerName = "CellContent";
+                overlaysr.sortingOrder = 5;
+
+                _perceptionOverlays.Add(go);
+            }
+        }
+    }
+    private void HidePerceptionOverlay()
+
+    {
+        for (int i = _perceptionOverlays.Count - 1; i >= 0; i--)
+        {
+            if (_perceptionOverlays[i] != null)
+                Destroy(_perceptionOverlays[i]);
+        }
+        _perceptionOverlays.Clear();
+    }
     // =========================================================================
     // Barre de vie
     // =========================================================================

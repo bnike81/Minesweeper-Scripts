@@ -303,10 +303,9 @@ public class EnemyBehaviour : MonoBehaviour
     // Provisoire : TMPro texte — sera remplace par sprites pixel art
     private GameObject _indicatorGO;
 
-    /// <summary>
-    /// Joue l animation alert propre a ce type d ennemi (pose avant combat).
-    /// Appelee par TurnManager a l activation, en parallele du "!".
-    /// </summary>
+    /// Animation alert avant combat. v10/v11 : alerte generique pour les
+    /// ennemis sans animation specifique (crabe, ours, etc.)
+    
     public IEnumerator PlayAlertPose()
     {
         switch (_ei.EnemyType)
@@ -323,33 +322,50 @@ public class EnemyBehaviour : MonoBehaviour
                     yield return StartCoroutine(_anim.BanditSwordAlertAnim());
                 break;
 
-            // Futurs ennemis : ajouter ici si animation alert distincte
-
             default:
-                yield break;
+                // v10/v11 : alerte generique (petit tremblement)
+                _ei.UpdateFacing();
+                yield return StartCoroutine(GenericAlertShake());
+                break;
         }
     }
 
-    /// <summary>Affiche un "!" bondissant au-dessus de l ennemi (detection). Fire-and-forget.</summary>
+    ///Tremblement rapide generique pour l alerte.
+    private IEnumerator GenericAlertShake()
+    {
+        var orig = _ei.OriginalPos;
+        float amp = 0.04f;
+        for (int i = 0; i < 4; i++)
+        {
+            transform.position = orig + new Vector3(amp, 0f, 0f);
+            yield return new WaitForSeconds(0.04f);
+            transform.position = orig + new Vector3(-amp, 0f, 0f);
+            yield return new WaitForSeconds(0.04f);
+        }
+        transform.position = orig;
+    }
+
+
+    /// Affiche un "!" bondissant au-dessus de l ennemi (detection). Fire-and-forget.
     public void ShowAlertIndicator()
     {
         StartCoroutine(ShowIndicatorCoroutine("!", new Color(1f, 0.2f, 0.2f)));
     }
 
-    /// <summary>Coroutine "!" — peut etre yieldee pour attendre la fin.</summary>
+    /// Coroutine "!" — peut etre yieldee pour attendre la fin.
     public IEnumerator ShowAlertIndicatorAndWait()
     {
         yield return StartCoroutine(
             ShowIndicatorCoroutine("!", new Color(1f, 0.2f, 0.2f)));
     }
 
-    /// <summary>Affiche un "?" au-dessus de l ennemi (perte de vue). Fire-and-forget.</summary>
+    /// Affiche un "?" au-dessus de l ennemi (perte de vue). Fire-and-forget.
     public void ShowLostIndicator()
     {
         StartCoroutine(ShowIndicatorCoroutine("?", new Color(0.4f, 0.7f, 1f)));
     }
 
-    /// <summary>Coroutine "?" — peut etre yieldee pour attendre la fin.</summary>
+    /// Coroutine "?" — peut etre yieldee pour attendre la fin.
     public IEnumerator ShowLostIndicatorAndWait()
     {
         yield return StartCoroutine(
@@ -435,10 +451,9 @@ public class EnemyBehaviour : MonoBehaviour
     // Tour par tour — action de l ennemi
     // =========================================================================
 
-    /// <summary>
-    /// Appele par TurnManager pendant EnemyTurn.
-    /// L ennemi avance d une case vers le heros ou attaque si adjacent.
-    /// </summary>
+    /// Action de l ennemi pendant son tour.
+    /// Adjacent → attaque. Dans perception → avance. Hors perception → "?".
+    /// v11 : logs detailles pour diagnostic distance.
     public IEnumerator TakeTurn()
     {
         if (_ei.IsDead) yield break;
@@ -447,39 +462,45 @@ public class EnemyBehaviour : MonoBehaviour
         if (hero == null) yield break;
         var heroPos = hero.GridPosition;
 
-        // Distance Manhattan au heros
-        int dist = Mathf.Abs(heroPos.x - _ei.GridX)
-                 + Mathf.Abs(heroPos.y - _ei.GridY);
+        int manhattan = Mathf.Abs(heroPos.x - _ei.GridX)
+                      + Mathf.Abs(heroPos.y - _ei.GridY);
+        int chebyshev = Mathf.Max(
+            Mathf.Abs(heroPos.x - _ei.GridX),
+            Mathf.Abs(heroPos.y - _ei.GridY));
         int perception = PerceptionRadius;
 
-        // Hors perception → ne fait rien, indicateur "?"
-        if (dist > perception)
+        // v11 : log detaille
+        Debug.Log("[EnemyBeh] " + _ei.EnemyType + " TakeTurn"
+            + " Grid=(" + _ei.GridX + "," + _ei.GridY + ")"
+            + " Hero=(" + heroPos.x + "," + heroPos.y + ")"
+            + " Manhattan=" + manhattan + " Chebyshev=" + chebyshev
+            + " Perception=" + perception
+            + " World=" + transform.position);
+
+        // Hors perception
+        if (manhattan > perception)
         {
-            // Yield pour laisser l animation se terminer avant le tour suivant
             yield return StartCoroutine(
                 ShowIndicatorCoroutine("?", new Color(0.4f, 0.7f, 1f)));
             yield break;
         }
 
-        // Adjacent (Chebyshev 1) → attaque pure (sans animation alert)
-        int chebyDist = Mathf.Max(
-            Mathf.Abs(heroPos.x - _ei.GridX),
-            Mathf.Abs(heroPos.y - _ei.GridY));
-        if (chebyDist <= 1)
+        // Adjacent → attaque
+        if (chebyshev <= 1)
         {
             _ei.UpdateFacing();
+            Debug.Log("[EnemyBeh] " + _ei.EnemyType + " → ATTAQUE (cheby=" + chebyshev + ")");
             yield return StartCoroutine(TurnAttack());
             yield break;
         }
 
-        // Dans perception mais pas adjacent → avancer d une case
+        // Dans perception mais pas adjacent → deplacement
+        Debug.Log("[EnemyBeh] " + _ei.EnemyType + " → DEPLACEMENT");
         yield return StartCoroutine(MoveTowardHero(heroPos));
     }
 
-    /// <summary>
     /// Attaque pure pour le tour par tour — sans animation alert.
     /// L animation alert joue a la decouverte (avec le "!"), pas a chaque tour.
-    /// </summary>
     public IEnumerator TurnAttack()
     {
         if (_ei.IsDead) yield break;
@@ -525,22 +546,15 @@ public class EnemyBehaviour : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Deplace l ennemi d une case vers le heros.
-    /// Uniquement sur cases revelees. Pathfinding simple :
-    /// parmi les 8 voisins reveles, choisir celui qui rapproche le plus.
-    /// </summary>
     private IEnumerator MoveTowardHero(Vector2Int heroPos)
     {
-        // Detecter grille active
-        bool inCave = CaveManager.Instance != null && CaveManager.Instance.IsInCave;
-        GridManager gm = inCave ? null : GridManager.Instance;
-        UndergroundGrid ug = inCave ? UndergroundGrid.Instance : null;
+        // ─── v13 FIX : utiliser ActiveGrid.Current (IGridContext) ───
+        // Fonctionne pour MainGrid, UndergroundGrid et ArenaGrid sans distinction.
+        var grid = ActiveGrid.Current;
+        if (grid == null) yield break;
 
-        int gridW, gridH;
-        if (inCave && ug != null) { gridW = ug.Width; gridH = ug.Height; }
-        else if (gm != null) { gridW = gm.Width; gridH = gm.Height; }
-        else yield break;
+        int gridW = grid.Width;
+        int gridH = grid.Height;
 
         // Trouver la meilleure case adjacente revelee
         Vector2Int bestCell = new Vector2Int(-1, -1);
@@ -561,8 +575,17 @@ public class EnemyBehaviour : MonoBehaviour
             if (nx < 0 || ny < 0 || nx >= gridW || ny >= gridH) continue;
 
             // Verifier que la case est revelee
-            Cell cell = inCave ? ug?.GetCell(nx, ny) : gm?.GetCell(nx, ny);
+            Cell cell = grid.GetCell(nx, ny);
             if (cell == null || !cell.IsRevealed) continue;
+
+            // Ne pas bouger sur la case du heros
+            if (nx == heroPos.x && ny == heroPos.y) continue;
+
+            // Verifier mur cave (UndergroundGrid)
+            if (grid is UndergroundGrid ug && !ug.IsFloor(nx, ny)) continue;
+
+            // Verifier montagne/eau (MainGrid)
+            if (cell.IsMountainReserved || cell.IsCoastWater) continue;
 
             // Verifier qu il n y a pas un autre ennemi dessus
             bool occupied = false;
@@ -586,10 +609,9 @@ public class EnemyBehaviour : MonoBehaviour
         // Aucune case valide → reste sur place
         if (bestCell.x < 0) yield break;
 
-        // Animer le deplacement
-        float cs = GridManager.Instance?.CellStep ?? 1.05f;
+        // ─── v13 FIX : utiliser grid.GridToWorld pour appliquer l offset ───
         Vector3 from = transform.position;
-        Vector3 to = new Vector3(bestCell.x * cs, bestCell.y * cs, from.z);
+        Vector3 to = grid.GridToWorld(bestCell.x, bestCell.y, from.z);
 
         // Orienter vers la direction de deplacement
         _ei.UpdateFacing();
@@ -606,6 +628,9 @@ public class EnemyBehaviour : MonoBehaviour
 
         // Mettre a jour la position grille
         _ei.SetGridPosition(bestCell.x, bestCell.y);
+
+        Debug.Log($"<color=#FF8800>[EnemyBeh]</color> {_ei.EnemyType} " +
+                  $"deplace vers ({bestCell.x},{bestCell.y})");
     }
 
     // =========================================================================

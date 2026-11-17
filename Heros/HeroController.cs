@@ -15,6 +15,9 @@ using System.Collections.Generic;
 ///      fluide — le héros se déplace dans le bon espace monde en cave.
 ///   3. PathfindAndMove/ApproachAndReveal/NavigateLoop acceptent IGridContext
 ///      au lieu de GridManager — fonctionnent sur surface ET en cave.
+///
+/// JOUR 12 : migration API FSM-first (BeginMove/EndMove/BeginCalc/EndCalc).
+/// Les setters legacy restent valides pour les resets massifs et le proxy.
 /// </summary>
 public class HeroController : MonoBehaviour
 {
@@ -227,6 +230,7 @@ public class HeroController : MonoBehaviour
         // En cave, ActiveGrid.Current est UndergroundGrid — sa méthode WorldToGrid
         // soustrait _worldOriginY et donne les bonnes coordonnées locales.
         // En surface, ActiveGrid.Current est GridManager — comportement identique à avant.
+
         var activeGrid = ActiveGrid.Current;
         if (activeGrid == null) return;
 
@@ -234,39 +238,61 @@ public class HeroController : MonoBehaviour
         int tx = targetGridPos.x;
         int ty = targetGridPos.y;
 
-        if (!activeGrid.IsInBounds(tx, ty)) return;
+        if (!activeGrid.IsInBounds(tx, ty))
+        {
+            // LOG v13
+            Debug.Log($"<color=#88FFFF>[HeroClick]</color> ({tx},{ty}) hors bornes — ignore");
+            return;
+        }
 
         var target = new Vector2Int(tx, ty);
-        if (target == _gridPos) return;
+        if (target == _gridPos)
+        {
+            // LOG v13
+            Debug.Log($"<color=#88FFFF>[HeroClick]</color> ({tx},{ty}) = position hero — ignore");
+            return;
+        }
 
         var cell = activeGrid.GetCell(tx, ty);
-
-        // En cave : bloquer uniquement les murs (clics sur sol non-révélé = valide → approach & reveal)
-        // En surface : bloquer les ennemis visibles via HasEnemyAt (comportement original)
         bool isCave = activeGrid is UndergroundGrid;
-        if (isCave)
+
+        // LOG v13 — snapshot du clic
+        bool hasEnemyPhys = HasEnemyAt(tx, ty);
+        int chebyDist = Mathf.Max(Mathf.Abs(tx - _gridPos.x), Mathf.Abs(ty - _gridPos.y));
+        Debug.Log($"<color=#88FFFF>[HeroClick]</color> hero={_gridPos} target=({tx},{ty}) " +
+                  $"cheby={chebyDist} cell.IsRevealed={(cell?.IsRevealed ?? false)} " +
+                  $"cell.IsEnemy={(cell?.IsEnemy ?? false)} HasEnemyAt={hasEnemyPhys} " +
+                  $"grid={activeGrid.GetType().Name} state={TurnManager.Instance?.State}");
+
+        // ── Dispatch unifie (bloc existant) ──
+        if (isCave && activeGrid is UndergroundGrid ugCheck && !ugCheck.IsFloor(tx, ty))
         {
-            var ug = activeGrid as UndergroundGrid;
-            if (ug != null && !ug.IsFloor(tx, ty)) return; // Mur → ignorer
-            // Ennemi révélé → laisser EnemyInstance.OnPointerClick gérer (comme surface)
-            if (cell != null && cell.IsRevealed && cell.IsEnemy) return;
-        }
-        else
-        {
-            if (HasEnemyAt(tx, ty)) return;
+            Debug.Log("<color=#88FFFF>[HeroClick]</color> → mur cave, ignore");
+            return;
         }
 
-        // Montagne : bloquer sur les cases montagne (surface uniquement)
+        if (cell != null && cell.IsRevealed && cell.IsEnemy)
+        {
+            Debug.Log("<color=#88FFFF>[HeroClick]</color> → cell.IsEnemy, delegate EnemyInstance");
+            return;
+        }
+
+        if (HasEnemyAt(tx, ty))
+        {
+            Debug.Log("<color=#88FFFF>[HeroClick]</color> → HasEnemyAt, delegate EnemyInstance");
+            return;
+        }
+
+        // 4. Montagne / eau : bloquer sur les cases montagne (surface uniquement)
         if (cell != null && (cell.IsMountainReserved || cell.IsCoastWater)) return;
 
         // Signaler une action hero au systeme de ronde
         EventBus.Publish(new OnHeroActionPerformed());
 
-        // Combat : rengainer avant de bouger
+        // ── Combat : rengainer avant de bouger ───────────────────────────────
         var combat = HeroCombat.Instance;
         if (combat != null && combat.IsInCombat)
         {
-            // Capturer activeGrid pour la lambda (évite closure sur variable loop)
             var gridCapture = activeGrid;
             var isCaveFlee = isCave; // capture pour lambda
             combat.RequestFlee(() =>
@@ -296,11 +322,9 @@ public class HeroController : MonoBehaviour
                                 ugFlee.MarkDangersPlaced(ciFlee);
                             }
                         }
-                        gridCapture.RevealCell(target.x, target.y);
-                        StartCoroutine(PathfindAndMove(_gridPos, target, gridCapture));
                     }
-                    else
-                        StartCoroutine(ApproachAndReveal(_gridPos, target, gridCapture));
+                    // Surface ET cave : approche + reveal depuis adjacent
+                    StartCoroutine(ApproachAndReveal(_gridPos, target, gridCapture));
                 }
                 else
                 {
@@ -312,11 +336,12 @@ public class HeroController : MonoBehaviour
             return;
         }
 
+        // ── Clic hors combat ─────────────────────────────────────────────────
         if (cell == null || !cell.IsRevealed)
         {
             _state.CollectOnArrival = false;
 
-            // ── Cave : safe first click (placer dangers avant tout reveal) ───
+            // Cave : safe first click (placer dangers avant tout reveal)
             if (isCave)
             {
                 var ugrid = activeGrid as UndergroundGrid;
@@ -341,7 +366,7 @@ public class HeroController : MonoBehaviour
                 }
             }
 
-            // Surface ET cave : approche + saut si nécessaire + reveal à l'atterrissage
+            // Surface ET cave : approche + reveal depuis adjacent
             StartCoroutine(ApproachAndReveal(_gridPos, target, activeGrid));
             return;
         }
@@ -364,46 +389,30 @@ public class HeroController : MonoBehaviour
             _pf = HeroPathfinder.Instance ?? FindObjectOfType<HeroPathfinder>();
             if (_pf == null) { Debug.LogError("[Hero] HeroPathfinder null!"); yield break; }
         }
-        _state.IsCalculating = true;
+        _state.BeginCalc("PathfindAndMove start");
 
         _pf.BuildBlockedCache();
 
-        // En cave : utiliser gm.IsBlocked() directement — respecte murs ET ennemis,
-        // pas le check IsRevealed de HeroPathfinder (inutile en cave, pas d'arbres)
-        bool inCave = gm is UndergroundGrid;
-        Vector2Int adj;
-        if (inCave)
-        {
-            adj = gm.IsBlocked(target.x, target.y)
-                ? FindAdjacentFreeCave(target, gm)
-                : target;
-        }
-        else
-        {
-            adj = _pf.IsBlocked(target, gm, _gridPos)
-                ? _pf.FindNearestFree(target, start, gm)
-                : target;
-        }
-        if (adj == start) { _state.IsCalculating = false; yield break; }
+        // Un seul chemin : _pf fonctionne via IGridContext → surface + cave
+        Vector2Int adj = _pf.IsBlocked(target, gm, _gridPos)
+            ? _pf.FindNearestFree(target, start, gm)
+            : target;
+
+        if (adj == start) { _state.EndCalc("PathfindAndMove adj=start"); yield break; }
 
         yield return null;
 
-        List<Vector2Int> path;
-        if (inCave)
-            // A* cave : seul gm.IsBlocked() bloque (murs + ennemis révélés, pas IsRevealed)
-            path = RunAStarCave(start, adj, gm);
-        else
-            path = _pf.RunAStar(start, adj, gm, _gridPos);
+        var path = _pf.RunAStar(start, adj, gm, _gridPos);
 
         if (path != null && path.Count > 0)
         {
-            _state.IsCalculating = false;
+            _state.EndCalc("PathfindAndMove path found");
             var segs = BuildSegments(start, path);
             yield return StartCoroutine(MoveAlongSegments(segs));
             yield break;
         }
 
-        _state.IsCalculating = false;
+        _state.EndCalc("PathfindAndMove no direct path");
         yield return StartCoroutine(NavigateLoop(start, adj, gm));
     }
 
@@ -516,143 +525,11 @@ public class HeroController : MonoBehaviour
             if (_pf == null) yield break;
         }
 
-        // ── CAVE : même logique que surface — launchpad + jump si dist > 1 ────
-        if (gm is UndergroundGrid)
-        {
-            _pf.BuildBlockedCache();
+        // ─── v13 Jour 5 : phase composite Revealing englobe tout le flow ───
+        var hs = HeroState.Instance;
+        hs?.TryTransition(HeroPhase.Revealing, "ApproachAndReveal start");
 
-            int distDirect = Mathf.Max(Mathf.Abs(target.x - _gridPos.x),
-                                        Mathf.Abs(target.y - _gridPos.y));
-
-            // ── Déjà adjacent (dist 1) → révéler directement ──
-            if (distDirect <= 1)
-            {
-                var result = gm.RevealCell(target.x, target.y);
-                UndergroundCellView.RefreshAllViews();
-
-                var revealedCell = gm.GetCell(target.x, target.y);
-                if (revealedCell != null && (revealedCell.IsEnemy || revealedCell.IsBoss))
-                {
-                    SetIdleSprite();
-                }
-                else if (result != RevealResult.AlreadyRevealed)
-                {
-                    // Stamina check (combat uniquement)
-                    if (TurnManager.Instance != null && TurnManager.Instance.IsActive)
-                    {
-                        var stam1 = StaminaManager.Instance;
-                        if (stam1 != null && stam1.MaxAffordableSteps() <= 0)
-                        { SetIdleSprite(); yield break; }
-                        stam1?.ConsumeMove(1);
-                    }
-
-                    _state.IsMoving = true;
-                    var from = GridToWorld(_gridPos);
-                    var to = GridToWorld(target);
-                    float dur = Vector3.Distance(from, to) / _moveSpeed;
-                    float elapsed2 = 0f;
-                    _lastDir = DominantDir(target - _gridPos);
-                    while (elapsed2 < dur)
-                    {
-                        elapsed2 += Time.deltaTime;
-                        transform.position = Vector3.Lerp(from, to, Mathf.Clamp01(elapsed2 / dur));
-                        _frameTimer += Time.deltaTime;
-                        if (_frameTimer >= _frameTime)
-                        { _frameTimer = 0f; _runFrame = (_runFrame + 1) % 6; ApplyRunSprite(_lastDir, _runFrame); }
-                        yield return null;
-                    }
-                    transform.position = to;
-                    _gridPos = target;
-                    _state.IsMoving = false;
-                    _runFrame = 0;
-                    SetIdleSprite();
-
-                    // Signaler fin d action heros (pour TurnManager — aussi en Inactive pour reactiver)
-                    if (TurnManager.Instance != null)
-                        EventBus.Publish(new OnHeroActionComplete());
-                }
-                yield break;
-            }
-
-            // ── Pas adjacent → trouver launchpad (case révélée à portée de jump) ──
-            var jump = HeroJump.Instance;
-            if (jump == null) yield break;
-
-            var caveLp = jump.FindLaunchPad(_gridPos, target, gm);
-            if (!caveLp.HasValue)
-            {
-                EventBus.Publish(new OnNotification
-                { Message = "Inaccessible depuis ici !", Type = NotificationType.Warning });
-                yield break;
-            }
-
-            // Se déplacer vers le launchpad si nécessaire
-            if (caveLp.Value != _gridPos)
-            {
-                var path = RunAStarCave(_gridPos, caveLp.Value, gm);
-                if (path != null && path.Count > 0)
-                    yield return StartCoroutine(MoveAlongSegments(BuildSegments(_gridPos, path)));
-            }
-
-            yield return WaitCache.Get(0.05f);
-
-            int d2 = Mathf.Max(Mathf.Abs(target.x - _gridPos.x),
-                                Mathf.Abs(target.y - _gridPos.y));
-            if (d2 <= 1)
-            {
-                // Adjacent après marche → révéler directement
-                var result = gm.RevealCell(target.x, target.y);
-                UndergroundCellView.RefreshAllViews();
-                var rc = gm.GetCell(target.x, target.y);
-                if (rc != null && (rc.IsEnemy || rc.IsBoss))
-                { SetIdleSprite(); }
-                else if (result != RevealResult.AlreadyRevealed)
-                {
-                    // Stamina check (combat uniquement)
-                    if (TurnManager.Instance != null && TurnManager.Instance.IsActive)
-                    {
-                        var stam2 = StaminaManager.Instance;
-                        if (stam2 != null && stam2.MaxAffordableSteps() <= 0)
-                        { SetIdleSprite(); yield break; }
-                        stam2?.ConsumeMove(1);
-                    }
-
-                    _state.IsMoving = true;
-                    var from = GridToWorld(_gridPos);
-                    var to = GridToWorld(target);
-                    float dur = Vector3.Distance(from, to) / _moveSpeed;
-                    float elapsed2 = 0f;
-                    _lastDir = DominantDir(target - _gridPos);
-                    while (elapsed2 < dur)
-                    {
-                        elapsed2 += Time.deltaTime;
-                        transform.position = Vector3.Lerp(from, to, Mathf.Clamp01(elapsed2 / dur));
-                        _frameTimer += Time.deltaTime;
-                        if (_frameTimer >= _frameTime)
-                        { _frameTimer = 0f; _runFrame = (_runFrame + 1) % 6; ApplyRunSprite(_lastDir, _runFrame); }
-                        yield return null;
-                    }
-                    transform.position = to;
-                    _gridPos = target;
-                    _state.IsMoving = false;
-                    _runFrame = 0;
-                    SetIdleSprite();
-                }
-            }
-            else if (d2 <= jump.MaxJumpDistance)
-            {
-                // Dans la portée de saut → jump (révèle à l'atterrissage)
-                jump.TryJump(_gridPos, target, gm);
-            }
-            else
-            {
-                EventBus.Publish(new OnNotification
-                { Message = "Trop loin pour sauter !", Type = NotificationType.Warning });
-            }
-            yield break;
-        }
-
-        // ── SURFACE : logique originale ───────────────────────────────────────
+        _pf.BuildBlockedCache();
         var launchPad = _pf.FindBestLaunchPad(start, target, gm);
 
         if (!launchPad.HasValue)
@@ -662,10 +539,13 @@ public class HeroController : MonoBehaviour
                 Message = "Inaccessible depuis ici !",
                 Type = NotificationType.Warning
             });
+            hs?.TryTransition(HeroPhase.Idle, "ApproachAndReveal fin (inaccessible)");
             yield break;
         }
 
         var lp = launchPad.Value;
+
+        _suppressActionComplete = true;
 
         if (lp != start)
         {
@@ -673,6 +553,8 @@ public class HeroController : MonoBehaviour
             if (path != null && path.Count > 0)
                 yield return StartCoroutine(MoveAlongSegments(BuildSegments(start, path)));
         }
+
+        _suppressActionComplete = false;
 
         yield return WaitCache.Get(0.06f);
 
@@ -683,73 +565,104 @@ public class HeroController : MonoBehaviour
         if (distToTarget <= 1)
         {
             var result = gm.RevealCell(target.x, target.y);
+
+            if (gm is UndergroundGrid)
+                UndergroundCellView.RefreshAllViews();
+
             var cell = gm.GetCell(target.x, target.y);
             bool hasEnemy = cell != null && (cell.IsEnemy || cell.IsBoss);
 
-            if (!hasEnemy)
+            if (hasEnemy)
             {
-                // Stamina check (combat uniquement)
-                if (TurnManager.Instance != null && TurnManager.Instance.IsActive)
-                {
-                    var stam3 = StaminaManager.Instance;
-                    if (stam3 != null && stam3.MaxAffordableSteps() <= 0)
-                    { SetIdleSprite(); yield break; }
-                    stam3?.ConsumeMove(1);
-                }
-
-                _state.IsMoving = true;
-                var from = GridToWorld(_gridPos);
-                var to = GridToWorld(target);
-                float dur = Vector3.Distance(from, to) / _moveSpeed;
-                float elapsed = 0f;
-                _lastDir = DominantDir(target - _gridPos);
-
-                while (elapsed < dur)
-                {
-                    elapsed += Time.deltaTime;
-                    transform.position = Vector3.Lerp(from, to, Mathf.Clamp01(elapsed / dur));
-                    _frameTimer += Time.deltaTime;
-                    if (_frameTimer >= _frameTime)
-                    {
-                        _frameTimer = 0f;
-                        _runFrame = (_runFrame + 1) % 6;
-                        ApplyRunSprite(_lastDir, _runFrame);
-                    }
-                    yield return null;
-                }
-
-                transform.position = to;
-                _gridPos = target;
-                _state.IsMoving = false;
-                _runFrame = 0;
                 SetIdleSprite();
-
-                if (HeroInteraction.Instance != null)
-                {
-                    var trap = HeroInteraction.Instance.CheckTrap(_gridPos);
-                    if (trap != null) _activeTrap = trap;
-                }
-                if (_activeTrap == null)
-                    HeroInteraction.Instance?.TryCollect(_gridPos);
-
-                // Signaler fin d action heros (pour TurnManager — aussi en Inactive pour reactiver)
-                if (TurnManager.Instance != null)
-                    EventBus.Publish(new OnHeroActionComplete());
+                hs?.TryTransition(HeroPhase.Idle, "ApproachAndReveal fin (ennemi revele)");
+                yield break;
             }
-        }
-        else if (distToTarget <= 3)
-        {
-            HeroJump.Instance?.TryJump(_gridPos, target, gm);
+
+            if (TurnManager.Instance != null && TurnManager.Instance.IsActive)
+            {
+                var stam = StaminaManager.Instance;
+                if (stam != null && stam.MaxAffordableSteps() <= 0)
+                {
+                    SetIdleSprite();
+                    hs?.TryTransition(HeroPhase.Idle, "ApproachAndReveal fin (stamina)");
+                    yield break;
+                }
+                stam?.ConsumeMove(1);
+            }
+
+            _suppressActionComplete = true;
+
+            // Note : pendant Revealing (phase composite), le setter IsMoving ne
+            // declenche pas de transition FSM — seul le flag legacy est maj
+            // pour l anim de sprite. On garde le setter direct ici.
+            _state.IsMoving = true;
+            var from = GridToWorld(_gridPos);
+            var to = GridToWorld(target);
+            float dur = Vector3.Distance(from, to) / _moveSpeed;
+            float elapsed = 0f;
+            _lastDir = DominantDir(target - _gridPos);
+
+            while (elapsed < dur)
+            {
+                elapsed += Time.deltaTime;
+                transform.position = Vector3.Lerp(from, to, Mathf.Clamp01(elapsed / dur));
+                _frameTimer += Time.deltaTime;
+                if (_frameTimer >= _frameTime)
+                {
+                    _frameTimer = 0f;
+                    _runFrame = (_runFrame + 1) % 6;
+                    ApplyRunSprite(_lastDir, _runFrame);
+                }
+                yield return null;
+            }
+
+            transform.position = to;
+            _gridPos = target;
+            _state.IsMoving = false;
+            _runFrame = 0;
+            SetIdleSprite();
+
+            if (HeroInteraction.Instance != null)
+            {
+                var trap = HeroInteraction.Instance.CheckTrap(_gridPos);
+                if (trap != null) _activeTrap = trap;
+            }
+            if (_activeTrap == null)
+                HeroInteraction.Instance?.TryCollect(_gridPos);
+
+            _suppressActionComplete = false;
+
+            // ─── v13 Jour 5 : sortir de Revealing AVANT de publier action complete ───
+            hs?.TryTransition(HeroPhase.Idle, "ApproachAndReveal fin (case vide)");
+
+            if (TurnManager.Instance != null)
+                EventBus.Publish(new OnHeroActionComplete());
         }
         else
         {
-            EventBus.Publish(new OnNotification
+            var jump = HeroJump.Instance;
+            int maxJump = jump != null ? jump.MaxJumpDistance : 3;
+
+            if (distToTarget <= maxJump && jump != null)
             {
-                Message = "Trop loin pour sauter !",
-                Type = NotificationType.Warning
-            });
+                jump.TryJump(_gridPos, target, gm);
+                // La fin de Revealing sera gere par HeroJump a l atterrissage
+                // (ou on peut le faire ici si HeroJump ne gere pas la SM)
+                hs?.TryTransition(HeroPhase.Idle, "ApproachAndReveal fin (jump lance)");
+            }
+            else
+            {
+                EventBus.Publish(new OnNotification
+                {
+                    Message = "Trop loin pour sauter !",
+                    Type = NotificationType.Warning
+                });
+                hs?.TryTransition(HeroPhase.Idle, "ApproachAndReveal fin (trop loin)");
+            }
         }
     }
+
 
     // =========================================================================
     // DEPLACEMENT + ATTAQUE (clic ennemi a distance)
@@ -777,7 +690,10 @@ public class HeroController : MonoBehaviour
     {
         var enemyPos = new Vector2Int(enemy.GridX, enemy.GridY);
         var gm = ActiveGrid.Current;
-        if (gm == null) yield break;
+        if (gm == null) { Debug.Log("<color=#FF00FF>[M2A]</color> gm null → break"); yield break; }
+
+        Debug.Log($"<color=#FF00FF>[M2A]</color> START hero={_gridPos} enemy={enemyPos} " +
+                  $"grid={gm.GetType().Name}");
 
         // Trouver la case adjacente libre la plus proche du heros
         Vector2Int? adjTarget = null;
@@ -786,33 +702,68 @@ public class HeroController : MonoBehaviour
                               new Vector2Int(1,1), new Vector2Int(1,-1),
                               new Vector2Int(-1,1), new Vector2Int(-1,-1) };
 
+        int candidatesChecked = 0;
+        int candidatesRejected = 0;
+
+        // ─── v13 FIX : preferer les cases alignees axially ───
+        // Score pour chaque candidat = (dist * 10) + penalty_diagonale
+        // Plus le score est bas, mieux c est.
+        int bestScore = int.MaxValue;
         foreach (var d in dirs)
         {
             var n = enemyPos + d;
-            if (!gm.IsInBounds(n.x, n.y)) continue;
+            if (!gm.IsInBounds(n.x, n.y)) { candidatesRejected++; continue; }
 
-            // Case adjacente valide : pas un mur, pas un ennemi (sauf notre position)
             var c = gm.GetCell(n.x, n.y);
             bool blocked = gm.IsBlocked(n.x, n.y);
-            // Cases non revelees comptent comme traversables (on connaît l ennemi)
-            if (blocked && c != null && c.IsRevealed) continue;
-            if (c != null && c.IsRevealed && (c.IsEnemy || c.IsBoss) && n != _gridPos) continue;
+            if (blocked && c != null && c.IsRevealed) { candidatesRejected++; continue; }
+            if (c != null && c.IsRevealed && (c.IsEnemy || c.IsBoss) && n != _gridPos)
+            { candidatesRejected++; continue; }
 
-            float dist = Mathf.Max(Mathf.Abs(n.x - _gridPos.x),
-                                    Mathf.Abs(n.y - _gridPos.y));
-            if (dist < bestDist) { bestDist = dist; adjTarget = n; }
+            candidatesChecked++;
+            int chebyDist = Mathf.Max(Mathf.Abs(n.x - _gridPos.x),
+                                       Mathf.Abs(n.y - _gridPos.y));
+
+            // Penalty : +3 si la case n est PAS alignee avec le hero
+            // (ni meme ligne ni meme colonne)
+            int penalty = 0;
+            bool alignedWithHero = (n.x == _gridPos.x) || (n.y == _gridPos.y);
+            if (!alignedWithHero) penalty += 3;
+
+            // Penalty : +1 si la case n est PAS alignee avec l ennemi
+            // (pour preferer les cardinales de l ennemi)
+            bool alignedWithEnemy = (d.x == 0) || (d.y == 0);
+            if (!alignedWithEnemy) penalty += 1;
+
+            int score = chebyDist * 10 + penalty;
+
+            Debug.Log($"<color=#FF00FF>[M2A]</color>   candidate={n} " +
+                      $"revealed={(c?.IsRevealed ?? false)} blocked={blocked} " +
+                      $"dist={chebyDist} alignH={alignedWithHero} " +
+                      $"alignE={alignedWithEnemy} score={score}");
+
+            if (score < bestScore)
+            {
+                bestScore = score;
+                bestDist = chebyDist;
+                adjTarget = n;
+            }
         }
+
+        Debug.Log($"<color=#FF00FF>[M2A]</color> candidates ok={candidatesChecked} " +
+                  $"rejected={candidatesRejected} adjTarget={adjTarget} bestDist={bestDist}");
 
         if (adjTarget == null)
         {
+            Debug.Log("<color=#FF00FF>[M2A]</color> → PAS DE PASSAGE");
             EventBus.Publish(new OnNotification
             { Message = "Pas de passage !", Type = NotificationType.Warning });
             yield break;
         }
 
-        // Si deja sur la case adjacente → attaquer directement
         if (adjTarget.Value == _gridPos)
         {
+            Debug.Log("<color=#FF00FF>[M2A]</color> → adjTarget == heroPos → RequestAttack direct (pas de move)");
             HeroCombat.Instance?.RequestAttack(enemy);
             yield break;
         }
@@ -821,33 +772,35 @@ public class HeroController : MonoBehaviour
         if (_pf == null)
         {
             _pf = HeroPathfinder.Instance ?? FindObjectOfType<HeroPathfinder>();
-            if (_pf == null) yield break;
+            if (_pf == null) { Debug.Log("<color=#FF00FF>[M2A]</color> _pf null → break"); yield break; }
         }
 
         _pf.BuildBlockedCache();
-        List<Vector2Int> path;
-        bool isCave = gm is UndergroundGrid;
-        if (isCave)
-            path = RunAStarCave(_gridPos, adjTarget.Value, gm);
-        else
-            path = _pf.RunAStar(_gridPos, adjTarget.Value, gm, _gridPos);
+        var path = _pf.RunAStar(_gridPos, adjTarget.Value, gm, _gridPos);
+
+        int pathCount = path?.Count ?? 0;
+        Debug.Log($"<color=#FF00FF>[M2A]</color> path count={pathCount} toward {adjTarget}");
 
         if (path == null || path.Count == 0)
         {
+            Debug.Log("<color=#FF00FF>[M2A]</color> → PAS DE CHEMIN A*");
             EventBus.Publish(new OnNotification
             { Message = "Pas de chemin !", Type = NotificationType.Warning });
             yield break;
         }
 
-        // Verifier stamina si en combat (deplacement + 1 pt attaque)
+        // ... reste de la coroutine INCHANGE (stamina check, flee, move, attack) ...
+
+        // Verifier stamina si en combat
         if (TurnManager.Instance != null && TurnManager.Instance.IsActive)
         {
             var sm = StaminaManager.Instance;
             if (sm != null)
             {
-                int needed = sm.MoveCost(path.Count) + 1; // deplacement + attaque
+                int needed = sm.MoveCost(path.Count) + 1;
                 if (sm.Current < needed)
                 {
+                    Debug.Log("<color=#FF00FF>[M2A]</color> → PAS ASSEZ ENDURANCE");
                     EventBus.Publish(new OnNotification
                     { Message = "Pas assez d'endurance !", Type = NotificationType.Warning });
                     yield break;
@@ -855,31 +808,29 @@ public class HeroController : MonoBehaviour
             }
         }
 
-        // Rengainer si necessaire avant de bouger
         var combat = HeroCombat.Instance;
         if (combat != null && combat.IsInCombat)
         {
+            Debug.Log("<color=#FF00FF>[M2A]</color> IsInCombat → rengaine avant move");
             bool sheathDone = false;
             combat.RequestFlee(() => sheathDone = true);
-            // Timeout de securite — 3s max pour la rengaine
             float timeout = 3f;
             while (!sheathDone && timeout > 0f)
             {
                 timeout -= Time.deltaTime;
                 yield return null;
             }
-            if (!sheathDone) yield break; // securite anti-blocage
+            if (!sheathDone) { Debug.Log("<color=#FF00FF>[M2A]</color> rengaine TIMEOUT → break"); yield break; }
         }
 
-        // Deplacement (MoveAlongSegments gere _state.IsMoving)
-        // Supprimer OnHeroActionComplete du deplacement — un seul tour pour deplacement+attaque
+        Debug.Log($"<color=#FF00FF>[M2A]</color> → MOVE vers {adjTarget} ({pathCount} segments)");
         _suppressActionComplete = true;
         yield return StartCoroutine(MoveAlongSegments(BuildSegments(_gridPos, path)));
         _suppressActionComplete = false;
 
-        // Verifier que l ennemi est toujours vivant et adjacent
         if (enemy == null || enemy.IsDead)
         {
+            Debug.Log("<color=#FF00FF>[M2A]</color> enemy mort apres move → break");
             SetIdleSprite();
             if (TurnManager.Instance != null)
                 EventBus.Publish(new OnHeroActionComplete());
@@ -888,18 +839,23 @@ public class HeroController : MonoBehaviour
 
         int finalDist = Mathf.Max(Mathf.Abs(_gridPos.x - enemy.GridX),
                                    Mathf.Abs(_gridPos.y - enemy.GridY));
+        Debug.Log($"<color=#FF00FF>[M2A]</color> apres move: hero={_gridPos} finalDist={finalDist}");
+
         if (finalDist > 1)
         {
+            Debug.Log("<color=#FF00FF>[M2A]</color> → finalDist>1 → break sans attaque");
             SetIdleSprite();
             if (TurnManager.Instance != null)
                 EventBus.Publish(new OnHeroActionComplete());
             yield break;
         }
 
-        // Attaquer
-        yield return null; // 1 frame pour laisser le mouvement se finaliser
+        yield return null;
         if (combat != null && !combat.IsAnimating)
+        {
+            Debug.Log("<color=#FF00FF>[M2A]</color> → ATTAQUE");
             combat.RequestAttack(enemy);
+        }
     }
 
     // =========================================================================
@@ -908,7 +864,7 @@ public class HeroController : MonoBehaviour
 
     private IEnumerator MoveAlongSegments(List<HeroMoveSegment> segments)
     {
-        _state.IsMoving = true;
+        _state.BeginMove("MoveAlongSegments start");
 
         // ── Stamina : tronquer le trajet (combat uniquement) ────────────────
         bool _staminaActive = TurnManager.Instance != null && TurnManager.Instance.IsActive;
@@ -925,7 +881,7 @@ public class HeroController : MonoBehaviour
             int affordable = stam.MaxAffordableSteps();
             if (affordable <= 0 && totalCells > 0)
             {
-                _state.IsMoving = false;
+                _state.EndMove("MoveAlongSegments stamina epuise");
                 _runFrame = 0;
                 SetIdleSprite();
                 EventBus.Publish(new OnNotification
@@ -1008,7 +964,7 @@ public class HeroController : MonoBehaviour
             }
         }
 
-        _state.IsMoving = false;
+        _state.EndMove("MoveAlongSegments done");
         _runFrame = 0;
         SetIdleSprite();
 
@@ -1116,16 +1072,35 @@ public class HeroController : MonoBehaviour
 
     private bool HasEnemyAt(int x, int y)
     {
-        var wp = new Vector2(x * _cellStep, y * _cellStep);
+        // ─── v13 FIX : utiliser GridToWorld pour appliquer l offset grille ───
+        var grid = ActiveGrid.Current;
+        Vector2 wp;
+        if (grid != null)
+        {
+            var w = grid.GridToWorld(x, y);
+            wp = new Vector2(w.x, w.y);
+        }
+        else
+        {
+            // Fallback : ancienne logique (sans offset)
+            wp = new Vector2(x * _cellStep, y * _cellStep);
+        }
+
         int _hitCount = Physics2D.OverlapCircleNonAlloc(wp, _cellStep * 0.45f, _physicsBuffer);
         foreach (var h in _physicsBuffer)
         {
             if (h == null) break;
             var ei = h.GetComponent<EnemyInstance>();
-            if (ei != null && !ei.IsDead) return true;
+            if (ei != null && !ei.IsDead)
+            {
+                // Verifier que l ennemi est LOGIQUEMENT sur cette case
+                // (evite les colliders qui debordent sur cases voisines)
+                if (ei.GridX == x && ei.GridY == y) return true;
+            }
         }
         return false;
     }
+
 
     private static readonly List<UnityEngine.EventSystems.RaycastResult> _uiRaycastResults
         = new List<UnityEngine.EventSystems.RaycastResult>(8);
@@ -1151,112 +1126,6 @@ public class HeroController : MonoBehaviour
         return false;
     }
 
-    // =========================================================================
-    // A* CAVE — utilise gm.IsBlocked() uniquement, pas IsRevealed
-    // Permet traversée cases non révélées, bloque murs ET ennemis révélés.
-    // =========================================================================
-
-    private List<Vector2Int> RunAStarCave(Vector2Int start, Vector2Int goal, IGridContext gm)
-    {
-        var open = new List<HeroANode>(64);
-        var closed = new HashSet<Vector2Int>();
-        var came = new Dictionary<Vector2Int, Vector2Int>();
-        var gScore = new Dictionary<Vector2Int, float>();
-
-        gScore[start] = 0f;
-        open.Add(new HeroANode(start, _pf.Heuristic(start, goal)));
-        int iter = 0;
-
-        while (open.Count > 0 && iter++ < 2000)
-        {
-            int bi = 0;
-            for (int i = 1; i < open.Count; i++)
-                if (open[i].F < open[bi].F) bi = i;
-            var cur = open[bi]; open.RemoveAt(bi);
-
-            if (cur.Pos == goal) return ReconstructCave(came, goal, start);
-            closed.Add(cur.Pos);
-
-            foreach (var d in _caveDirs)
-            {
-                var n = cur.Pos + d;
-                if (!gm.IsInBounds(n.x, n.y)) continue;
-                if (closed.Contains(n)) continue;
-                if (gm.IsBlocked(n.x, n.y) && n != goal) continue;
-
-                // Diagonale : vérifier les deux cases cardinales adjacentes
-                // pour empêcher de couper les coins de mur
-                bool isDiag = d.x != 0 && d.y != 0;
-                if (isDiag)
-                {
-                    bool cardX = gm.IsBlocked(cur.Pos.x + d.x, cur.Pos.y);
-                    bool cardY = gm.IsBlocked(cur.Pos.x, cur.Pos.y + d.y);
-                    if (cardX || cardY) continue;
-                }
-
-                float step = isDiag ? 1.414f : 1f;
-                float g = (gScore.TryGetValue(cur.Pos, out float cg) ? cg : float.MaxValue) + step;
-                if (!gScore.TryGetValue(n, out float old) || g < old)
-                {
-                    gScore[n] = g;
-                    came[n] = cur.Pos;
-                    open.Add(new HeroANode(n, g + _pf.Heuristic(n, goal)));
-                }
-            }
-        }
-        return null;
-    }
-
-    private List<Vector2Int> ReconstructCave(Dictionary<Vector2Int, Vector2Int> came,
-        Vector2Int end, Vector2Int start)
-    {
-        var path = new List<Vector2Int>();
-        var cur = end;
-        while (came.ContainsKey(cur) && cur != start)
-        { path.Insert(0, cur); cur = came[cur]; }
-        return path;
-    }
-
-    private Vector2Int FindAdjacentFreeCave(Vector2Int target, IGridContext gm)
-    {
-        // Si le héros est déjà adjacent à la cible → rester sur place
-        int heroDist = Mathf.Max(Mathf.Abs(_gridPos.x - target.x),
-                                 Mathf.Abs(_gridPos.y - target.y));
-        if (heroDist == 1 && !gm.IsBlocked(_gridPos.x, _gridPos.y))
-            return _gridPos;
-
-        // Sinon, trouver la case libre adjacente la plus proche du héros
-        // (en excluant les diagonales bloquées par un coin de mur)
-        Vector2Int best = _gridPos;
-        float bestDist = float.MaxValue;
-        foreach (var d in _caveDirs)
-        {
-            var n = target + d;
-            if (!gm.IsInBounds(n.x, n.y) || gm.IsBlocked(n.x, n.y)) continue;
-            // Diagonale : vérifier que les cardinales ne sont pas bloquées (coin de mur)
-            if (d.x != 0 && d.y != 0)
-            {
-                if (gm.IsBlocked(target.x + d.x, target.y) ||
-                    gm.IsBlocked(target.x, target.y + d.y)) continue;
-            }
-            float dist = Mathf.Max(Mathf.Abs(n.x - _gridPos.x),
-                                   Mathf.Abs(n.y - _gridPos.y));
-            if (dist < bestDist)
-            {
-                bestDist = dist;
-                best = n;
-            }
-        }
-        return best;
-    }
-
-    // 8 directions comme en surface — permet attaque depuis toutes les cases adjacentes
-    private static readonly Vector2Int[] _caveDirs =
-    {
-        Vector2Int.up, Vector2Int.down, Vector2Int.left, Vector2Int.right,
-        new Vector2Int(1, 1), new Vector2Int(-1, 1),
-        new Vector2Int(1, -1), new Vector2Int(-1, -1)
-    };
 
     // =========================================================================
     // GRIDTOWORLD — CORRECTION 2
@@ -1309,7 +1178,7 @@ public class HeroController : MonoBehaviour
             _pf = HeroPathfinder.Instance ?? FindObjectOfType<HeroPathfinder>();
             if (_pf == null) { Debug.LogError("[Hero] HeroPathfinder null!"); yield break; }
         }
-        _state.IsCalculating = true;
+        _state.BeginCalc("PathfindAndMoveGrid start");
         _pf.BuildBlockedCache();
 
         // Résoudre la case adjacente si la cible est bloquée (ennemi/mur)
@@ -1317,13 +1186,13 @@ public class HeroController : MonoBehaviour
             ? FindAdjacentFreeGrid(target, gm) : target;
 
         if (!dest.HasValue || dest.Value == _gridPos)
-        { _state.IsCalculating = false; yield break; }
+        { _state.EndCalc("PathfindAndMoveGrid no dest"); yield break; }
 
         yield return null;
 
         // A* sur la cave — accepte cases non révélées comme traversables
         var path = RunAStarGrid(_gridPos, dest.Value, gm);
-        _state.IsCalculating = false;
+        _state.EndCalc("PathfindAndMoveGrid path computed");
 
         if (path != null && path.Count > 0)
         {
@@ -1345,17 +1214,17 @@ public class HeroController : MonoBehaviour
             _pf = HeroPathfinder.Instance ?? FindObjectOfType<HeroPathfinder>();
             if (_pf == null) yield break;
         }
-        _state.IsCalculating = true;
+        _state.BeginCalc("ApproachAndRevealGrid start");
         _pf.BuildBlockedCache();
 
         // Trouver une case adjacente accessible
         var adj = FindAdjacentFreeGrid(target, gm);
         if (!adj.HasValue || adj.Value == _gridPos)
-        { _state.IsCalculating = false; yield break; }
+        { _state.EndCalc("ApproachAndRevealGrid no adj"); yield break; }
 
         // Se déplacer vers la case adjacente
         var path = RunAStarGrid(_gridPos, adj.Value, gm);
-        _state.IsCalculating = false;
+        _state.EndCalc("ApproachAndRevealGrid path computed");
 
         if (path != null && path.Count > 0)
             yield return StartCoroutine(MoveAlongSegments(BuildSegments(_gridPos, path)));

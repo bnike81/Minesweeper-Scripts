@@ -245,86 +245,31 @@ public class UndergroundCellView : MonoBehaviour, IPointerClickHandler
         if (_cell == null || !_initialized) return;
         if (eventData.button != PointerEventData.InputButton.Left) return;
 
-        // ── Portail (entrée OU sortie) → sortir de la grotte ───────────────
+        // ── Portail (entree OU sortie) → sortir de la grotte ─────────────────
         // Les deux portails sont bidirectionnels — on peut sortir par les deux.
-        // CaveManager.ExitCave détermine quel portail surface correspond.
+        // CaveManager.ExitCave determine quel portail surface correspond.
         if (_isExitPortal || _isEntryPortal)
         {
             CaveManager.Instance?.ExitCave(_cell.X, _cell.Y);
             return;
         }
 
-        // ── Murs → non cliquables ─────────────────────────────────────────────
-        if (!_isFloor || _isWallContour) return;
-
-        var ug = UndergroundGrid.Instance;
-        if (ug == null) return;
-
-        var hero = HeroController.Instance;
-        if (hero == null) return;
-
-        // ── Safe first click → placer les dangers DANS LA CAVE ACTIVE ────────
-        var cm = CaveManager.Instance;
-        int ci = cm != null ? cm.ActiveCaveIndex : 0;
-
-        if (!ug.DangersPlacedForCave(ci))
-        {
-            var spawner = cm?.GetSpawner(ci);
-            var config = spawner?.Config;
-            if (config == null)
-            {
-                var caveGen = FindObjectOfType<CaveGenerator>(true);
-                config = caveGen?._config;
-            }
-            if (config != null)
-            {
-                var (minY, maxY) = cm != null ? cm.GetCaveYRange(ci) : (0, -1);
-                Debug.Log($"[UCV] PlaceDangers cave={ci} Y=[{minY},{maxY}] " +
-                          $"config={config.name} ratio={config.dangerRatio}");
-                ug.PlaceDangers(_cell.X, _cell.Y, config, minY, maxY);
-                ug.MarkDangersPlaced(ci);
-            }
-            else
-            {
-                Debug.LogWarning($"[UCV] ❌ Pas de CaveConfig pour cave={ci} !");
-            }
-        }
-
-        var target = new Vector2Int(_cell.X, _cell.Y);
-
-        // ── Combat en cours → fuir d'abord, puis bouger ───────────────────────
-        var combat = HeroCombat.Instance;
-        if (combat != null && combat.IsInCombat)
-        {
-            combat.RequestFlee(() =>
-            {
-                if (!_cell.IsRevealed)
-                    hero.ApproachAndRevealOnGrid(target, ug);
-                else
-                    hero.MoveOnGrid(target, ug);
-            });
-            return;
-        }
-
-        // ── Case non révélée → reveal direct + déplacement (mode test) ────────
-        // Comme en surface pré-héros : clic = révéler immédiatement,
-        // puis le héros se déplace aussi loin que possible vers la zone révélée.
-        if (!_cell.IsRevealed)
-        {
-            ug.RevealCell(_cell.X, _cell.Y);
-            // Après reveal, la case (et ses voisines flood) sont révélées
-            // → le héros peut s'y déplacer via pathfinding normal
-            if (_cell.IsRevealed && !_cell.IsEnemy)
-                hero.MoveOnGrid(target, ug);
-            else if (_cell.IsRevealed && _cell.IsEnemy)
-                hero.MoveOnGrid(target, ug); // s'arrêtera adjacent (IsBlocked)
-            return;
-        }
-
-        // ── Case révélée (vide ou ennemi) → se déplacer ───────────────────────
-        // IsBlocked bloque les ennemis révélés → PathfindAndMove s'arrête adjacent
-        // → EnemyInstance.TriggerCombat se déclenche à l'arrivée
-        hero.MoveOnGrid(target, ug);
+        // ── v13 ETAPE 1 : tout le reste est delegue a HeroController.Update ──
+        //
+        // On ne fait PLUS :
+        //   - RevealCell direct (causait "reveal + walk onto enemy")
+        //   - MoveOnGrid direct (duplication de HeroController)
+        //   - RequestFlee + MoveOnGrid (duplication)
+        //   - Safe first click (deja gere par HeroController.Update)
+        //
+        // HeroController.Update lit la souris en raw et dispatch :
+        //   - case non revelee → ApproachAndReveal (marche adjacent + reveal)
+        //   - case revelee + ennemi → bloque + EnemyInstance.OnPointerClick
+        //   - case revelee vide → PathfindAndMove
+        //   - combat actif → RequestFlee
+        //
+        // Comportement identique a la surface : un seul point d entree pour
+        // le dispatch clic → un seul comportement coherent.
     }
 
     // ── Force sprite après 1 frame (après Awake/Start de EnemyAnimator) ──────

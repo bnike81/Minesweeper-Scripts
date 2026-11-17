@@ -158,27 +158,46 @@ public class EnemyAnimator : MonoBehaviour
         ApplyArcherIdle();
     }
 
+    /// Animation lunge generique sans callback.
     public IEnumerator AttackLungeAnim()
+    {
+        yield return StartCoroutine(AttackLungeAnimInternal(null));
+    }
+
+    /// Implementation interne du lunge avec callback optionnel au peak.
+    /// Courbe sinus : peak a t=0.5 (point le plus proche du heros).
+
+    public IEnumerator AttackLungeAnim(System.Action onDamage)
+    {
+        yield return StartCoroutine(AttackLungeAnimInternal(onDamage));
+    }
+
+    private IEnumerator AttackLungeAnimInternal(System.Action onDamage)
     {
         var dir = GetHeroDir();
         float t = 0f;
-        float half = 0.25f;
+        float halfDuration = 0.25f;
+        bool damageFired = false;
+
         while (t < 1f)
         {
-            t += Time.deltaTime / half;
-            float d = Mathf.Sin(Mathf.Clamp01(t) * Mathf.PI) * _attackLungeDefault;
+            t += Time.deltaTime / halfDuration;
+            float clamped = Mathf.Clamp01(t);
+            float d = Mathf.Sin(clamped * Mathf.PI) * _attackLungeDefault;
             transform.position = _ei.OriginalPos + dir * d;
+
+            // Degats au peak
+            if (!damageFired && clamped >= 0.5f)
+            {
+                damageFired = true;
+                onDamage?.Invoke();
+            }
+
             yield return null;
         }
+
         transform.position = _ei.OriginalPos;
         yield return new WaitForSeconds(_attackDelay);
-    }
-
-    /// <summary>Surcharge avec callback degats a la fin du lunge</summary>
-    public IEnumerator AttackLungeAnim(System.Action onDamage)
-    {
-        yield return StartCoroutine(AttackLungeAnim());
-        onDamage?.Invoke();
     }
 
     public IEnumerator HitFlashAnim()

@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 using System.Collections;
 
 /// <summary>
@@ -29,7 +29,7 @@ public class TrapInstance : MonoBehaviour
     [SerializeField] private Sprite _spriteClosed;
 
     [Header("=== Parametres ===")]
-    [Tooltip("Degats inflig�s a chaque etape (1 et 2)")]
+    [Tooltip("Degats infligés a chaque etape (1 et 2)")]
     [SerializeField, Range(1, 3)] private int _damagePerHit = 1;
     [Tooltip("Duree de l animation de fermeture")]
     [SerializeField, Range(0.1f, 0.6f)] private float _closeAnimDuration = 0.3f;
@@ -174,9 +174,10 @@ public class TrapInstance : MonoBehaviour
         // Infliger degats
         DamageHero();
 
-        // Bloquer le heros via HeroState
+        // v13 Jour 7 : routage via SetLockedPhase avec phase Trapped
         if (HeroState.Instance != null)
-            HeroState.Instance.IsUILocked = true;
+            HeroState.Instance.SetLockedPhase(
+                true, HeroPhase.Trapped, "TrapInstance.TriggerSequence");
 
         // Garder en etat Closing pour signaler que c'est actif
         // (pas Closed qui signifie desamorce)
@@ -215,9 +216,10 @@ public class TrapInstance : MonoBehaviour
         if (_sr != null && _spriteClosed != null)
             _sr.sprite = _spriteClosed;
 
-        // Debloquer le heros
+        // v13 Jour 7 : sortie Trapped → Idle via SetLockedPhase
         if (HeroState.Instance != null)
-            HeroState.Instance.IsUILocked = false;
+            HeroState.Instance.SetLockedPhase(
+                false, HeroPhase.Trapped, "TrapInstance.Disarm");
 
         EventBus.Publish(new OnNotification
         {

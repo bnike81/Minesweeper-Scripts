@@ -48,36 +48,49 @@ public class HeroPathfinder : MonoBehaviour
         _blockedCache.Clear();
         float step = _cellStep;
 
+        // ── WorldObject — EXCLURE les GroundItem (fix v13 precedent) ─────────
         foreach (var wo in FindObjectsOfType<WorldObject>())
         {
+            if (wo.GetComponent<GroundItem>() != null) continue;
             int wx = Mathf.RoundToInt(wo.transform.position.x / step);
             int wy = Mathf.RoundToInt(wo.transform.position.y / step);
             _blockedCache.Add(new Vector2Int(wx, wy));
         }
+
+        // ── NPC ──────────────────────────────────────────────────────────────
         foreach (var npc in FindObjectsOfType<NPC>())
         {
             int wx = Mathf.RoundToInt(npc.transform.position.x / step);
             int wy = Mathf.RoundToInt(npc.transform.position.y / step);
             _blockedCache.Add(new Vector2Int(wx, wy));
         }
+
+        // ── EnemyInstance — v13 FIX : utiliser GridX/GridY, pas transform ────
+        // Les sprites d ennemis ont des offsets visuels qui cassent l arrondi
+        // depuis transform.position. On lit directement les coordonnees
+        // logiques qui sont la source de verite.
         foreach (var ei in FindObjectsOfType<EnemyInstance>())
         {
-            int wx = Mathf.RoundToInt(ei.transform.position.x / step);
-            int wy = Mathf.RoundToInt(ei.transform.position.y / step);
-            _blockedCache.Add(new Vector2Int(wx, wy));
+            if (ei.IsDead) continue; // ignorer les ennemis morts
+            _blockedCache.Add(new Vector2Int(ei.GridX, ei.GridY));
         }
+
+        // ── MerchantNPC ──────────────────────────────────────────────────────
         foreach (var m in FindObjectsOfType<MerchantNPC>())
         {
             int wx = Mathf.RoundToInt(m.transform.position.x / step);
             int wy = Mathf.RoundToInt(m.transform.position.y / step);
             _blockedCache.Add(new Vector2Int(wx, wy));
         }
+
+        // ── CampfireNPC ──────────────────────────────────────────────────────
         foreach (var c in FindObjectsOfType<CampfireNPC>())
         {
             int wx = Mathf.RoundToInt(c.transform.position.x / step);
             int wy = Mathf.RoundToInt(c.transform.position.y / step);
             _blockedCache.Add(new Vector2Int(wx, wy));
         }
+
         _cacheBuilt = true;
     }
 

@@ -117,7 +117,8 @@ public class HeroCombat : MonoBehaviour
 
     private void OnPlayerDamaged(OnPlayerDamaged evt)
     {
-        if (evt.Damage <= 0) return;
+        // ─── v13 FIX : retire le check "if (evt.Damage <= 0) return;"
+        // pour jouer le flinch visuel meme quand la defense bloque les degats.
 
         // Si une animation HERO est en cours (Draw/Attack/Sheath),
         // ne pas lancer de flinch → evite les conflits de sprites.
@@ -140,25 +141,47 @@ public class HeroCombat : MonoBehaviour
         _activeHitCoroutine = StartCoroutine(PlayHitAnimation(fromRight));
     }
 
+    /// Direction de l attaque ennemie pour le hurt hero.
+    /// v11/v12 : utilise TurnManager.CurrentAttacker en priorite.
     private bool FindAttackerDirection()
     {
         var hero = HeroController.Instance;
         if (hero == null) return true;
+        Vector3 heroPos = hero.transform.position;
 
+        // v11 : priorite a CurrentAttacker du TurnManager
+        var tm = TurnManager.Instance;
+        if (tm != null && tm.CurrentAttacker != null && !tm.CurrentAttacker.IsDead)
+        {
+            return tm.CurrentAttacker.transform.position.x > heroPos.x;
+        }
+
+        // Fallback : chercher un ennemi qui anime (cas legacy)
         foreach (var ei in EnemyInstance.All)
         {
-            if (!ei.IsAnimating || ei.IsDead) continue;
-            return ei.transform.position.x > hero.transform.position.x;
+            if (ei == null || ei.IsDead) continue;
+            if (!ei.IsAnimating) continue;
+            return ei.transform.position.x > heroPos.x;
         }
+
         return !_facingRight;
     }
 
-    /// <summary>
     /// Flinch visuel — ne verrouille PAS le mouvement.
-    /// Seules les actions HERO (Draw/Attack/Sheath) verrouillent.
+    /// v13 Jour 4 : transitionne la SM vers Flinching pendant l anim.
     /// </summary>
     private IEnumerator PlayHitAnimation(bool attackFromRight)
     {
+        // ─── v13 Jour 4 : transitionner vers Flinching ───
+        var hs = HeroState.Instance;
+        bool smOwned = false;
+        if (hs != null && hs.SM != null)
+        {
+            // Only transition if not in a phase that disallows Flinching
+            smOwned = hs.SM.TryTransitionTo(HeroPhase.Flinching, "PlayHitAnimation start");
+        }
+        // ─── fin transition ───
+
         bool lookRight = attackFromRight;
         Sprite[] sprites;
 
@@ -190,7 +213,15 @@ public class HeroCombat : MonoBehaviour
         }
 
         _activeHitCoroutine = null;
+
+        // ─── v13 Jour 4 : retour a Idle si on a bien transitionne ───
+        if (smOwned && hs != null && hs.SM != null
+            && hs.SM.CurrentPhase == HeroPhase.Flinching)
+        {
+            hs.SM.TryTransitionTo(HeroPhase.Idle, "PlayHitAnimation end");
+        }
     }
+
 
     // =========================================================================
     // API publique
@@ -273,7 +304,10 @@ public class HeroCombat : MonoBehaviour
         NotifyActionComplete();
     }
 
-    /// <summary>Animation d attaque pure + infliger degats</summary>
+    /// Animation d attaque pure + infliger degats.
+    /// v12 FIX : attend que la REACTION de l ennemi (hit shake + flash)
+    /// soit terminee avant de retourner, pour que NotifyActionComplete
+    /// ne parte qu apres la fin COMPLETE de l action hero + consequences.
     private IEnumerator RunAttack(EnemyInstance enemy)
     {
         UpdateFacing(enemy);
@@ -302,6 +336,24 @@ public class HeroCombat : MonoBehaviour
         {
             int dmg = Mathf.Max(1, Equipment.Instance?.AttackDamage ?? 1);
             enemy.ReceiveAttack(dmg);
+
+            // ── v12 FIX : attendre que la reaction de l ennemi soit TERMINEE ──
+            // ReceiveAttack lance PlayerAttackSequence en StartCoroutine (fire-and-forget).
+            // On attend que IsAnimating redevienne false (fin du shake + flash).
+            // Timeout 3s de securite.
+            float timeout = 3f;
+            float elapsed = 0f;
+            while (enemy != null && !enemy.IsDead && enemy.IsAnimating && elapsed < timeout)
+            {
+                elapsed += Time.deltaTime;
+                yield return null;
+            }
+
+            if (elapsed >= timeout)
+                Debug.LogWarning("[HeroCombat] RunAttack — timeout attente reaction ennemi");
+
+            // Petit delai apres le shake pour la lisibilite
+            yield return WaitCache.Get(0.15f);
         }
     }
 
@@ -311,6 +363,11 @@ public class HeroCombat : MonoBehaviour
         yield return StartCoroutine(SheathThenFlee(onDone));
     }
 
+    /// Rengaine l arme puis execute le callback de fuite.
+    /// v12 FIX : NotifyActionComplete RETIRE d ici.
+    ///   Le signal partira de MoveAlongSegments quand le deplacement sera
+    ///   COMPLETEMENT termine. Cela garantit que le heros finit son action
+    ///   (rengaine + deplacement + arrivee) AVANT que le tour ennemi ne commence.
     private IEnumerator SheathThenFlee(System.Action onDone)
     {
         SetLocked(true);
@@ -324,28 +381,23 @@ public class HeroCombat : MonoBehaviour
         SetLocked(false);
         HeroController.Instance?.SetIdleSprite();
 
-        // ── FIX v6 : onDone AVANT NotifyActionComplete ──
-        // L ancien ordre (Notify → onDone) causait un blocage :
-        // TurnManager verrouillait IsUILocked=true AVANT que le mouvement ne demarre.
-        // Nouveau flux :
-        //   1. onDone.Invoke() → demarre le deplacement (coroutine)
-        //   2. NotifyActionComplete → TurnManager lance le tour ennemi
-        // Le heros se deplace PENDANT que les ennemis jouent. Apres le tour ennemi,
-        // IsUILocked=false et le hero peut re-agir normalement.
+        // Lancer le deplacement via le callback
         onDone?.Invoke();
-        NotifyActionComplete();
+
+        // ── v12 FIX : PAS de NotifyActionComplete ici ──
+        // Le signal sera publie par HeroController.MoveAlongSegments
+        // quand le deplacement sera completement termine (position finale atteinte).
+        // Cela garantit : rengaine → deplacement → arrivee → PUIS tour ennemi.
     }
 
     // =========================================================================
     // v5 — Signal au TurnManager
     // =========================================================================
 
-    /// <summary>
     /// Publie OnHeroActionComplete pour signaler au TurnManager
     /// que le heros a termine son action (attaque ou fuite).
     /// Ne fait rien si TurnManager n existe pas ou n est pas actif
     /// (mode libre — pas de tour par tour).
-    /// </summary>
     private void NotifyActionComplete()
     {
         var tm = TurnManager.Instance;
@@ -378,12 +430,21 @@ public class HeroCombat : MonoBehaviour
     // Helpers
     // =========================================================================
 
-    /// <summary>Verrou : IsAnimating + HeroState.IsUILocked</summary>
+    /// Verrou : IsAnimating + transition SM vers Attacking.
+    /// v13 Jour 3 : utilise SetLockedPhase pour transitionner explicitement
+    /// vers HeroPhase.Attacking au lieu du UILocked generique.
     private void SetLocked(bool locked)
     {
         IsAnimating = locked;
+
         if (HeroState.Instance != null)
-            HeroState.Instance.IsUILocked = locked;
+        {
+            HeroState.Instance.SetLockedPhase(
+                locked,
+                HeroPhase.Attacking,
+                "HeroCombat.SetLocked=" + locked);
+        }
+
         Debug.Log("<color=#FF00FF>[HeroCombat]</color> SetLocked(" + locked + ")");
     }
 
